@@ -337,13 +337,22 @@ def main():
                                     st.session_state.messages, text_analysis, radar_data)
 
             st.success("Оценка успешно завершена.")
-            st.write("Ссылка на аналитический дашборд скопирована в защищенный реестр.")
-            magic_link = f"http://localhost:8501/?report={report_id}"
-            st.code(magic_link, language="text")
-
-            if st.button("Завершить сессию"):
-                for key in list(st.session_state.keys()): del st.session_state[key]
-                st.rerun()
+            st.markdown("### Защищенный отчет сформирован")
+            
+            st.write("Для просмотра отчета добавьте этот параметр в конец адресной строки браузера:")
+            st.code(f"?report={report_id}", language="text")
+            
+            st.divider()
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Открыть HR-Дашборд сейчас", type="primary", use_container_width=True):
+                    st.query_params["report"] = report_id
+                    st.rerun()
+            with col2:
+                if st.button("Завершить сессию", use_container_width=True):
+                    for key in list(st.session_state.keys()): del st.session_state[key]
+                    st.rerun()
 
 
 # ----------------------------------------
