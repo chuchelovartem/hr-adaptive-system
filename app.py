@@ -403,8 +403,12 @@ def show_hr_view(report_id):
     if not st.session_state.hr_authorized:
         st.warning("Внимание: Раздел защищен. Доступ только для сотрудников отдела кадров.")
         pin_code = st.text_input("Введите PIN-код для доступа (по умолчанию: 1234)", type="password")
-        # В реальной среде ПИН-код берется из st.secrets
-        expected_pin = st.secrets.get("HR_PIN", "1234") 
+        # Пытаемся получить ПИН из секретов, если его нет — доступ будет невозможен
+        expected_pin = st.secrets.get("HR_PIN") 
+
+        if not expected_pin:
+        st.error("Ошибка конфигурации: ПИН-код администратора не установлен.")
+        return
         
         if st.button("Подтвердить"):
             if pin_code == expected_pin:
