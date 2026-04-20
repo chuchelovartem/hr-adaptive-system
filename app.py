@@ -9,15 +9,10 @@ import streamlit as st
 import streamlit.components.v1 as components
 import plotly.graph_objects as go
 
-# ==========================================
-# 1. АНТИФРОД И ПРОКТОРИНГ (С ПОДСЧЕТОМ)
-# ==========================================
-
 def inject_proctoring_js():
     js_code = """
     <script>
     let cheatCount = parseInt(new URL(window.parent.location.href).searchParams.get('cheat_count') || '0');
-
     const blockCopyPaste = () => {
         const inputs = window.parent.document.querySelectorAll('textarea, input');
         inputs.forEach(input => {
@@ -27,7 +22,6 @@ def inject_proctoring_js():
         });
     }
     setInterval(blockCopyPaste, 1000);
-
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === 'hidden') {
             cheatCount++;
@@ -41,13 +35,8 @@ def inject_proctoring_js():
     """
     components.html(js_code, height=0)
 
-
-# ==========================================
-# 2. БАЗА ДАННЫХ И ВИЗУАЛИЗАЦИЯ
-# ==========================================
-
 def init_db():
-    conn = sqlite3.connect('hr_platform_v3.db')
+    conn = sqlite3.connect('hr_platform_v4.db')
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS adaptive_reports (
@@ -66,7 +55,7 @@ def init_db():
 
 def save_report(role, pos, history, analysis, radar_data, cheat_count):
     report_id = str(uuid.uuid4())
-    conn = sqlite3.connect('hr_platform_v3.db')
+    conn = sqlite3.connect('hr_platform_v4.db')
     c = conn.cursor()
     c.execute(
         "INSERT INTO adaptive_reports (id, role_type, target_pos, dialog_history, analysis_text, radar_data, cheat_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -77,7 +66,7 @@ def save_report(role, pos, history, analysis, radar_data, cheat_count):
     return report_id
 
 def get_report(report_id):
-    conn = sqlite3.connect('hr_platform_v3.db')
+    conn = sqlite3.connect('hr_platform_v4.db')
     c = conn.cursor()
     c.execute("SELECT role_type, target_pos, dialog_history, analysis_text, radar_data, cheat_count FROM adaptive_reports WHERE id=?", (report_id,))
     res = c.fetchone()
@@ -101,11 +90,6 @@ def draw_radar_chart(data_dict):
     fig = go.Figure(data=go.Scatterpolar(r=values, theta=categories, fill='toself', line_color='#2E86C1'))
     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 10])), height=300, margin=dict(l=40, r=40, t=20, b=20))
     st.plotly_chart(fig, use_container_width=True)
-
-
-# ==========================================
-# 3. ЛОГИКА GIGACHAT (IRT & HIGH-PRECISION)
-# ==========================================
 
 class GigaChatIntegration:
     def __init__(self, auth_key):
@@ -132,26 +116,22 @@ def get_adaptive_question_prompt(role, pos, step, max_steps):
     if role == "Соискатель":
         return f"""Ты — строгий технический эксперт. Ты проводишь собеседование на позицию: {pos}.
         ВНИМАНИЕ: ПОЛЬЗОВАТЕЛЬ — ЭТО КАНДИДАТ. Его реплики — это ответы на твои вопросы на экзамене.
-        
         ШАГ: {step}/{max_steps}.
-        
         ТВОЯ ЗАДАЧА: Прочитай предыдущий ответ кандидата и задай ОДИН следующий практический вопрос.
-        
-        🚨 КРИТИЧЕСКИЕ ПРАВИЛА (ШТРАФ ЗА НАРУШЕНИЕ):
-        1. ВЫВЕДИ ТОЛЬКО САМ ВОПРОС. Ни единого слова больше!
-        2. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать обратную связь (не пиши "Правильно", "Почти верно", "Уточни", "Вот другой вариант"). Ты на экзамене, а не на обучении!
-        3. ЗАПРЕЩЕНО пояснять, зачем ты задаешь этот вопрос.
-        4. Формат вопроса: "Представь ситуацию...", "Что будет, если...". Без базовой теории."""
+        КРИТИЧЕСКИЕ ПРАВИЛА:
+        ВЫВЕДИ ТОЛЬКО САМ ВОПРОС. Ни единого слова больше! Запрещена любая обратная связь и оценка.
+        ОБЕСПЕЧЬ РАЗНОСТОРОННОСТЬ: Если кандидат ответил слабо или не по делу, кардинально смени техническую подобласть для следующего вопроса. Не зацикливайся на одной теме. Проверяй разные аспекты профессии.
+        Формат вопроса: "Представь ситуацию...", "Что будет, если...". Без базовой теории."""
     else:
         scenario = ["Знакомство и ответственность.", "Current State (энергия).", "Competencies (STAR).", "Weaknesses.", "Future.", "Deep Dive."]
         curr_task = scenario[min(step-1, len(scenario)-1)]
         return f"""Ты — HR-коуч. Сотрудник: {pos}. Шаг: {step}/{max_steps}. Этап: {curr_task}.
         ВНИМАНИЕ: ПОЛЬЗОВАТЕЛЬ — ЭТО СОТРУДНИК.
-        🚨 КРИТИЧЕСКОЕ ПРАВИЛО: Выведи ТОЛЬКО один вопрос. Без вступлений, без оценки его прошлых слов ("Отлично", "Понятно" - ЗАПРЕЩЕНО)."""
+        КРИТИЧЕСКОЕ ПРАВИЛО: Выведи ТОЛЬКО один вопрос. Без вступлений, без оценки его прошлых слов."""
 
 def get_final_analysis_prompt(role, pos, transcript, cheat_count):
     base_rules = "Стиль: профессиональный HR-аудит. Запрещено использовать эмодзи."
-    proctoring = f"\nВНИМАНИЕ: Кандидат переключал вкладки {cheat_count} раз! Это признак списывания. Отрази это в рисках." if cheat_count > 0 else ""
+    proctoring = f" ВНИМАНИЕ: Кандидат переключал вкладки {cheat_count} раз! Это признак списывания. Отрази это в рисках." if cheat_count > 0 else ""
     
     if role == "Соискатель":
         return f"""Ты — HR-директор. Проведи аудит интервью на позицию {pos}.
@@ -171,11 +151,6 @@ def get_final_analysis_prompt(role, pos, transcript, cheat_count):
         {{"Проактивность": 0, "Бизнес_Видение": 0, "Стрессоустойчивость": 0, "Мотивация": 0, "Самостоятельность": 0}}
         ```
         {base_rules}"""
-
-
-# ==========================================
-# 4. ИНТЕРФЕЙС
-# ==========================================
 
 def main():
     st.set_page_config(page_title="Modular HR-Tech System", layout="centered")
@@ -253,20 +228,20 @@ def main():
             raw = giga.ask(get_final_analysis_prompt(st.session_state.role, st.session_state.pos, transcript, cheat_count), [])
             
             radar_data = {}
-            json_match = re.search(r'```json\n(.*?)\n```', raw, re.DOTALL)
-            if json_match:
-                try:
-                    radar_data = json.loads(json_match.group(1))
-                    text_report = raw.replace(json_match.group(0), "").strip()
-                except: text_report = raw
-            else: text_report = raw
+            try:
+                json_str = re.search(r'\{.*?\}', raw, re.DOTALL).group()
+                radar_data = json.loads(json_str)
+                text_report = raw.replace(json_str, "").replace("```json", "").replace("```", "").strip()
+            except:
+                text_report = raw
+                if st.session_state.role == "Соискатель":
+                    radar_data = {"Техническая_Точность": 0, "Скорость_Мышления": 0, "Практический_Опыт": 0, "Лаконичность": 0, "Устойчивость_к_проверке": 0}
+                else:
+                    radar_data = {"Проактивность": 0, "Бизнес_Видение": 0, "Стрессоустойчивость": 0, "Мотивация": 0, "Самостоятельность": 0}
 
             rid = save_report(st.session_state.role, st.session_state.pos, st.session_state.messages, text_report, radar_data, cheat_count)
             st.success("Интервью завершено.")
-            
-            # Интегрирована твоя реальная ссылка
             app_domain = "https://adaptive-hr-system.streamlit.app"
-            
             st.code(f"{app_domain}/?report={rid}")
             if st.button("На главную"):
                 st.query_params.clear()
@@ -305,9 +280,20 @@ def show_hr_view(report_id):
             with c2: draw_radar_chart(radar_data)
         st.markdown(analysis)
         
-        messages = json.loads(hist_j)
-        transcript = "\n".join([f"{'Система' if m['role']=='assistant' else 'Кандидат'}: {m['content']}" for m in messages])
-        st.download_button("Скачать отчет", f"ОТЧЕТ: {pos}\n\nНАРУШЕНИЯ: {cheat_count}\n\n{analysis}\n\nСТЕНОГРАММА:\n{transcript}")
+        st.divider()
+        with st.expander("Стенограмма адаптивного интервью (Просмотр в браузере)"):
+            messages = json.loads(hist_j)
+            for msg in messages:
+                if msg["role"] == "assistant":
+                    st.markdown(f"**Система:** {msg['content']}")
+                else:
+                    if "ПРОКТОРИНГ" in msg["content"]:
+                        st.error(f"**Кандидат:** {msg['content']}")
+                    else:
+                        st.info(f"**Кандидат:** {msg['content']}")
+        
+        transcript_text = "\n".join([f"{'Система' if m['role']=='assistant' else 'Кандидат'}: {m['content']}" for m in messages])
+        st.download_button("Скачать отчет", f"ОТЧЕТ: {pos}\n\nНАРУШЕНИЯ: {cheat_count}\n\n{analysis}\n\nСТЕНОГРАММА:\n{transcript_text}")
 
 if __name__ == "__main__":
     main()
