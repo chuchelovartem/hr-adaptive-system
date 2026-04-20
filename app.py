@@ -16,7 +16,6 @@ import plotly.graph_objects as go
 def inject_proctoring_js():
     js_code = """
     <script>
-    // 1. Блокировка вставки и копирования
     const blockCopyPaste = () => {
         const inputs = window.parent.document.querySelectorAll('textarea, input');
         inputs.forEach(input => {
@@ -27,14 +26,12 @@ def inject_proctoring_js():
     }
     setInterval(blockCopyPaste, 1000);
 
-    // 2. Детектор потери фокуса (Tab-Switching)
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === 'hidden') {
             alert('ПРОКТОРИНГ: Зафиксировано переключение вкладки! Система помечает это как попытку списывания.');
         }
     });
 
-    // 3. Защита от случайного обновления (F5)
     window.addEventListener("beforeunload", (e) => {
         e.preventDefault();
         e.returnValue = 'Вы уверены, что хотите покинуть страницу? Прогресс тестирования может быть утерян.';
@@ -90,8 +87,39 @@ def get_report(report_id):
     return res
 
 
+def draw_gauge_chart(score):
+    """Строит спидометр (Gauge Chart) для отображения общего уровня."""
+    if score < 4:
+        level, color = "Слабый", "#E74C3C"
+    elif score < 8:
+        level, color = "Средний", "#F39C12"
+    else:
+        level, color = "Сильный", "#27AE60"
+
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=score,
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': f"Общий уровень компетенций: {level}", 'font': {'size': 20}},
+        gauge={
+            'axis': {'range': [0, 10], 'tickwidth': 1, 'tickcolor': "darkblue"},
+            'bar': {'color': color},
+            'bgcolor': "white",
+            'borderwidth': 2,
+            'bordercolor': "gray",
+            'steps': [
+                {'range': [0, 3.9], 'color': "rgba(231, 76, 60, 0.2)"},
+                {'range': [4, 7.9], 'color': "rgba(243, 156, 18, 0.2)"},
+                {'range': [8, 10], 'color': "rgba(39, 174, 96, 0.2)"}
+            ]
+        }
+    ))
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=300)
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def draw_radar_chart(data_dict):
-    """Строит радарную диаграмму компетенций с помощью Plotly."""
+    """Строит радарную диаграмму компетенций."""
     categories = list(data_dict.keys())
     values = list(data_dict.values())
 
@@ -117,7 +145,7 @@ def draw_radar_chart(data_dict):
 # 3. ИНТЕГРАЦИЯ GIGACHAT И ПРОМПТЫ (IRT & NLP)
 # ==========================================
 
-class GigaChatAPI:
+class GigaChatIntegration:
     def __init__(self, auth_key):
         self.auth_key = auth_key
         self.token = self._get_token()
@@ -148,50 +176,52 @@ class GigaChatAPI:
 
 
 def get_adaptive_question_prompt(role, pos, current_step, max_steps):
-    """Адаптивная генерация (IRT): ИИ учитывает предыдущие ответы для подбора сложности."""
-    base = f"Ты — Технический Интервьюер. Вакансия: {pos}. Шаг интервью: {current_step} из {max_steps}."
+    """Адаптивная генерация (IRT): ИИ задает короткие, точечные вопросы без воды."""
+    base = f"Ты — строгий Технический Интервьюер. Вакансия: {pos}. Шаг интервью: {current_step} из {max_steps}."
 
-    if role == "Соискатель":
-        return f"""{base}
-        ТВОЯ ЗАДАЧА: Проанализируй историю диалога. Оцени, насколько хорошо кандидат ответил на предыдущий вопрос.
-        1. Если ответил сильно — сгенерируй следующий технический вопрос СЛОЖНЕЕ (углубись в архитектуру).
-        2. Если ответил слабо — задай базовый вопрос из смежной области.
-        3. Если это первый вопрос — задай микро-кейс средней сложности.
-        ВЫВОД: Напиши ТОЛЬКО текст следующего вопроса. Никаких приветствий и оценок вслух."""
-    else:
-        return f"""{base}
-        ТВОЯ ЗАДАЧА: Оценить потенциал сотрудника. Если он отвечает развернуто — задай сложный кросс-грейдовый кейс. Если отвечает скупо — задай рефлексивный вопрос о проблемах в его процессах.
-        ВЫВОД: Напиши ТОЛЬКО текст следующего вопроса."""
+    return f"""{base}
+    ТВОЯ ЗАДАЧА: Проанализировать предыдущий ответ и задать следующий вопрос. 
+    
+    ПРАВИЛА ГЕНЕРАЦИИ ВОПРОСА (НАРУШЕНИЕ КАРАЕТСЯ СБОЕМ СИСТЕМЫ):
+    1. Задай ТОЛЬКО ОДИН точечный вопрос, требующий понимания предметной области.
+    2. Вопрос должен быть сформулирован так, чтобы кандидат мог ответить на него максимум одним-двумя предложениями.
+    3. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать свои рассуждения, оценивать предыдущий ответ вслух, использовать эмодзи, писать приветствия или слова вроде "🤖 ИИ:", "Вопрос:".
+    4. Если кандидат отвечает слабо — задай базовый вопрос. Если сильно — усложни уровень (углубление в архитектуру/процессы).
+    
+    ВЫВОД: СТРОГО текст вопроса (одно предложение) и больше ничего."""
 
 
 def get_final_analysis_prompt(role, pos, transcript):
-    """Многомерный анализ с изоляцией контекста (защита от галлюцинаций самоприсвоения)."""
+    """Многомерный анализ: Строгий академический стиль без эмодзи."""
     
+    base_rules = """
+    [ПРАВИЛА ЖЕСТКОГО АУДИТА — КРИТИЧЕСКИ ВАЖНО!]
+    1. Оценивай ТОЛЬКО текст, написанный после слов "Ответ Кандидата:". 
+    2. ЗАПРЕЩЕНО использовать термины из текста "Вопрос ИИ:" для оценки знаний кандидата.
+    3. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать эмодзи (смайлики) и неформальную лексику. Используй строгий академический деловой стиль.
+    4. Если кандидат отвечает отписками или не использует профессиональные термины — это САБОТАЖ и НОЛЬ ЗНАНИЙ.
+    """
+
     if role == "Соискатель":
-        return f"""Ты — бескомпромиссный Технический Аудитор уровня Senior. Твоя задача — провести жесткий аудит стенограммы интервью на позицию: {pos}.
+        return f"""Ты — бескомпромиссный Технический Аудитор. Проведи аудит стенограммы интервью на позицию: {pos}.
 
 [СТЕНОГРАММА ИНТЕРВЬЮ]
 {transcript}
 [КОНЕЦ СТЕНОГРАММЫ]
-
-[ПРАВИЛА ЖЕСТКОГО АУДИТА — КРИТИЧЕСКИ ВАЖНО!]
-1. Оценивай ТОЛЬКО текст, написанный после слов "Ответ Кандидата:". 
-2. ЗАПРЕЩЕНО использовать термины из текста "Вопрос ИИ:" для оценки знаний кандидата. Если ИИ спросил про МКЭ, а кандидат ответил "да", значит кандидат НЕ ЗНАЕТ МКЭ.
-3. Если кандидат отвечает отписками (1-4 слова), шутками ("толкал и тянул", "раз-два-три", "М+К+Э", "рисую") или не использует профессиональные термины — это САБОТАЖ и НОЛЬ ЗНАНИЙ.
+{base_rules}
 
 [АЛГОРИТМ ПРИНЯТИЯ РЕШЕНИЯ]
-ЕСЛИ большинство ответов кандидата — это короткие отписки, бессмысленные фразы или саботаж:
-Выведи СТРОГО этот текст:
-### Антифрод-Радар: 🚨 ПРОВАЛЕН (Саботаж/Отписки)
-### Лексический профиль: Низкая деловая культура.
-### Фактические Компетенции: 0/10. Кандидат не дал ни одного содержательного технического ответа.
-### ИТОГОВЫЙ ВЕРДИКТ: ❌ ОТКЛОНЕН (Дисквалификация)
+ЕСЛИ большинство ответов — отписки или бессмысленные фразы:
+Выведи СТРОГО этот текст (без эмоций):
+Антифрод-Радар: ПРОВАЛЕН (Саботаж/Отписки).
+Лексический профиль: Низкая деловая культура.
+Фактические Компетенции: 0 из 10. Кандидат не дал ни одного содержательного технического ответа.
+ИТОГОВЫЙ ВЕРДИКТ: ОТКЛОНЕН (Дисквалификация).
 
-ЕСЛИ ответы развернутые, длинные и профессиональные:
-Сделай стандартный отчет (Антифрод, Лексика, Компетенции с цитатами, Вердикт: Рекомендован).
+ЕСЛИ ответы развернутые и профессиональные:
+Сделай стандартный отчет (Антифрод, Лексика, Оценка компетенций с цитатами, Итоговый Вердикт). Укажи приблизительный уровень компетенций (Слабый, Средний или Сильный).
 
 [ОБЯЗАТЕЛЬНЫЙ JSON В КОНЦЕ]
-Если был саботаж или глупые ответы — ставь везде 0. Иначе — адекватные оценки от 1 до 10.
 ```json
 {{
     "Hard_Skills": 0,
@@ -207,15 +237,12 @@ def get_final_analysis_prompt(role, pos, transcript):
 [СТЕНОГРАММА ИНТЕРВЬЮ]
 {transcript}
 [КОНЕЦ СТЕНОГРАММЫ]
+{base_rules}
 
-[ВНИМАНИЕ: ЗАЩИТА ОТ ГАЛЛЮЦИНАЦИЙ]
-Оценивай ТОЛЬКО текст после "Ответ Кандидата:". Не додумывай достижения из текста "Вопрос ИИ:". 
-Если ответы короткие отписки — отмечай это как низкую мотивацию.
-
-Сделай текстовый отчет:
-### Индекс готовности к повышению:
-### Лексический профиль (Признаки выгорания):
-### Карьерный Action Plan:
+Сделай подробный текстовый отчет в академическом стиле:
+Индекс готовности к повышению: (Укажи уровень: Слабый, Средний или Сильный)
+Лексический профиль:
+Карьерный Action Plan:
 
 В конце отчета выведи JSON-блок (оценки 0-10):
 ```json
@@ -237,9 +264,8 @@ def main():
     st.set_page_config(page_title="Адаптивная платформа оценки", layout="centered")
     init_db()
 
-    # --- ВАШ КЛЮЧ АВТОРИЗАЦИИ GIGACHAT ---
-    AUTH_KEY = st.secrets["GIGACHAT_KEY"]
-    giga = GigaChatAPI(AUTH_KEY)
+    AUTH_KEY = st.secrets.get("GIGACHAT_KEY", "ВАШ_КЛЮЧ")
+    giga = GigaChatIntegration(AUTH_KEY)
 
     if "report" in st.query_params:
         show_hr_view(st.query_params["report"])
@@ -279,7 +305,6 @@ def main():
                 st.session_state.step = "interview"
                 st.session_state.q_count = 1
 
-                # Генерация первого вопроса
                 with st.spinner("Анализ профиля..."):
                     prompt = get_adaptive_question_prompt(st.session_state.role, pos, 1, st.session_state.max_questions)
                     first_q = giga.ask(prompt, [])
@@ -292,19 +317,15 @@ def main():
         elapsed = time.time() - st.session_state.start_time
         remaining = max(0, time_limit - int(elapsed))
 
-        # Отрисовка истории чата
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
                 st.write(msg["content"])
 
         st.progress(remaining / time_limit)
-        st.caption(
-            f"Прогресс: вопрос {st.session_state.q_count} из {st.session_state.max_questions} | Время: {remaining} сек.")
+        st.caption(f"Прогресс: вопрос {st.session_state.q_count} из {st.session_state.max_questions} | Время: {remaining} сек.")
 
-        # Чат-строка ввода (срабатывает по Enter)
         user_input = st.chat_input("Напишите ответ...")
 
-        # Проверка таймера
         if remaining <= 0 and not user_input:
             user_input = "[ПРОКТОРИНГ: Кандидат не уложился в отведенное время]"
 
@@ -316,7 +337,6 @@ def main():
                 with st.spinner("Анализ ответа и генерация следующего кейса..."):
                     prompt = get_adaptive_question_prompt(st.session_state.role, st.session_state.pos,
                                                           st.session_state.q_count, st.session_state.max_questions)
-                    # Отправляем историю диалога для адаптивности
                     history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
                     next_q = giga.ask(prompt, history)
                     st.session_state.messages.append({"role": "assistant", "content": next_q})
@@ -326,32 +346,24 @@ def main():
                 st.session_state.step = "analysis"
                 st.rerun()
 
-        # Автообновление для таймера
         time.sleep(1)
         st.rerun()
 
     elif st.session_state.step == "analysis":
         with st.spinner("Проведение изолированного многомерного анализа..."):
-            
-            # 1. "Расплющиваем" историю в единый текст для ИИ-аудитора
             transcript_text = ""
             for m in st.session_state.messages:
                 speaker = "Вопрос ИИ" if m["role"] == "assistant" else "Ответ Кандидата"
                 transcript_text += f"{speaker}:\n{m['content']}\n\n"
             
-            # 2. Передаем текст прямо в промпт
             prompt = get_final_analysis_prompt(st.session_state.role, st.session_state.pos, transcript_text)
-            
-            # 3. ВАЖНО: Отправляем ИИ пустую историю, чтобы он не запутался в ролях!
             raw_analysis = giga.ask(prompt, []) 
 
-            # Извлечение JSON для дашборда с помощью регулярных выражений
             radar_data = {}
             json_match = re.search(r'```json\n(.*?)\n```', raw_analysis, re.DOTALL)
             if json_match:
                 try:
                     radar_data = json.loads(json_match.group(1))
-                    # Удаляем JSON блок из текстового отчета, чтобы не дублировать
                     text_analysis = raw_analysis.replace(json_match.group(0), "").strip()
                 except:
                     text_analysis = raw_analysis
@@ -362,47 +374,81 @@ def main():
                                     st.session_state.messages, text_analysis, radar_data)
 
             st.success("Оценка успешно завершена.")
-            st.markdown("### Защищенный отчет сформирован")
+            st.markdown("### Данные сохранены")
+            st.write("Пожалуйста, скопируйте ссылку ниже и передайте её вашему HR-менеджеру для проверки результатов:")
             
-            st.write("Для просмотра отчета нажмите кнопку ниже или добавьте параметр к адресу:")
-            st.code(f"?report={report_id}", language="text")
+            # Генерация абсолютной ссылки (можно заменить на ваш реальный домен)
+            base_url = "https://your-app-domain.streamlit.app" 
+            report_url = f"{base_url}/?report={report_id}"
+            
+            st.code(report_url, language="text")
             
             st.divider()
             
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Открыть HR-Дашборд сейчас", type="primary", use_container_width=True):
-                    st.query_params["report"] = report_id
-                    st.rerun()
-            with col2:
-                if st.button("Завершить сессию", use_container_width=True):
-                    for key in list(st.session_state.keys()): del st.session_state[key]
-                    st.rerun()
+            if st.button("Завершить сессию и вернуться на главную", use_container_width=True):
+                for key in list(st.session_state.keys()): del st.session_state[key]
+                st.rerun()
 
 
 # ----------------------------------------
 # КАБИНЕТ HR (АНАЛИТИЧЕСКИЙ ДАШБОРД)
 # ----------------------------------------
 def show_hr_view(report_id):
+    st.title("Аналитический HR-Дашборд")
+    
+    # 1. Слой безопасности HR (ПИН-КОД)
+    if 'hr_authorized' not in st.session_state:
+        st.session_state.hr_authorized = False
+
+    if not st.session_state.hr_authorized:
+        st.warning("Внимание: Раздел защищен. Доступ только для сотрудников отдела кадров.")
+        pin_code = st.text_input("Введите PIN-код для доступа (по умолчанию: 1234)", type="password")
+        # В реальной среде ПИН-код берется из st.secrets
+        expected_pin = st.secrets.get("HR_PIN", "1234") 
+        
+        if st.button("Подтвердить"):
+            if pin_code == expected_pin:
+                st.session_state.hr_authorized = True
+                st.rerun()
+            else:
+                st.error("Ошибка верификации: Неверный PIN-код.")
+        return
+
+    # 2. Отрисовка Дашборда после авторизации
     data = get_report(report_id)
     if data:
         role, pos, history_json, analysis, radar_json = data
-        st.title("Аналитический HR-Дашборд")
         st.success("Верификация пройдена. Данные защищены.")
 
         col1, col2 = st.columns(2)
         col1.metric("Тип оценки", role)
-        col2.metric("Позиция", pos)
+        # Использование markdown для поддержки длинных названий с переносом строк
+        with col2:
+            st.markdown(f"**Целевая позиция:**<br>{pos}", unsafe_allow_html=True)
 
         st.divider()
 
-        # Отрисовка радарной диаграммы
         radar_data = json.loads(radar_json)
         if radar_data:
-            st.markdown("### Профиль компетенций (Spider Chart)")
-            draw_radar_chart(radar_data)
+            # Расчет среднего балла для спидометра
+            avg_score = sum(radar_data.values()) / len(radar_data) if radar_data else 0
+            
+            col_chart1, col_chart2 = st.columns(2)
+            with col_chart1:
+                draw_gauge_chart(avg_score)
+            with col_chart2:
+                draw_radar_chart(radar_data)
 
         st.markdown("### Заключение ИИ-Аудитора")
+        
+        # Добавляем возможность выгрузки отчета в txt (Альтернатива PDF для легкого скачивания)
+        st.download_button(
+            label="📄 Скачать текстовый отчет",
+            data=f"ПОЗИЦИЯ: {pos}\n\nЗАКЛЮЧЕНИЕ:\n{analysis}",
+            file_name=f"HR_Report_{report_id[:8]}.txt",
+            mime="text/plain"
+        )
+        
         st.markdown(analysis)
 
         st.divider()
@@ -410,14 +456,15 @@ def show_hr_view(report_id):
             messages = json.loads(history_json)
             for msg in messages:
                 if msg["role"] == "assistant":
-                    st.markdown(f"**🤖 ИИ:** {msg['content']}")
+                    # Убрано эмодзи и префикс для более строгого вида
+                    st.markdown(f"**Система:** {msg['content']}")
                 else:
                     if "ПРОКТОРИНГ" in msg["content"]:
-                        st.error(f"**👤 Кандидат:** {msg['content']}")
+                        st.error(f"**Кандидат:** {msg['content']}")
                     else:
-                        st.info(f"**👤 Кандидат:** {msg['content']}")
+                        st.info(f"**Кандидат:** {msg['content']}")
     else:
-        st.error("Отчет не найден.")
+        st.error("Отчет не найден в базе данных.")
         if st.button("На главную"):
             st.query_params.clear()
             st.rerun()
