@@ -14,6 +14,7 @@ import plotly.graph_objects as go
 # ==========================================
 
 def inject_proctoring_js():
+    """Инъекция JS для блокировки копирования и детекции переключения вкладок."""
     js_code = """
     <script>
     const blockCopyPaste = () => {
@@ -28,13 +29,13 @@ def inject_proctoring_js():
 
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === 'hidden') {
-            alert('ПРОКТОРИНГ: Зафиксировано переключение вкладки! Система помечает это как попытку списывания.');
+            alert('ПРОКТОРИНГ: Зафиксировано переключение вкладки! Система фиксирует это в отчете.');
         }
     });
 
     window.addEventListener("beforeunload", (e) => {
         e.preventDefault();
-        e.returnValue = 'Вы уверены, что хотите покинуть страницу? Прогресс тестирования может быть утерян.';
+        e.returnValue = 'Прогресс интервью может быть утерян.';
     });
     </script>
     """
@@ -62,7 +63,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 def save_report(role, pos, history, analysis, radar_data):
     report_id = str(uuid.uuid4())
     conn = sqlite3.connect('hr_adaptive_platform.db')
@@ -75,7 +75,6 @@ def save_report(role, pos, history, analysis, radar_data):
     conn.close()
     return report_id
 
-
 def get_report(report_id):
     conn = sqlite3.connect('hr_adaptive_platform.db')
     c = conn.cursor()
@@ -86,9 +85,8 @@ def get_report(report_id):
     conn.close()
     return res
 
-
 def draw_gauge_chart(score):
-    """Строит спидометр (Gauge Chart) для отображения общего уровня."""
+    """Визуализация общего уровня компетенций (Спидометр)."""
     if score < 4:
         level, color = "Слабый", "#E74C3C"
     elif score < 8:
@@ -99,57 +97,47 @@ def draw_gauge_chart(score):
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=score,
-        domain={'x': [0, 1], 'y': [0, 1]},
-        title={'text': f"Общий уровень: {level}", 'font': {'size': 20}},
+        title={'text': f"Общий уровень: {level}", 'font': {'size': 18}},
         gauge={
-            'axis': {'range': [0, 10], 'tickwidth': 1, 'tickcolor': "darkblue"},
+            'axis': {'range': [0, 10]},
             'bar': {'color': color},
-            'bgcolor': "white",
-            'borderwidth': 2,
-            'bordercolor': "gray",
             'steps': [
-                {'range': [0, 3.9], 'color': "rgba(231, 76, 60, 0.2)"},
-                {'range': [4, 7.9], 'color': "rgba(243, 156, 18, 0.2)"},
-                {'range': [8, 10], 'color': "rgba(39, 174, 96, 0.2)"}
+                {'range': [0, 4], 'color': "rgba(231, 76, 60, 0.1)"},
+                {'range': [4, 8], 'color': "rgba(243, 156, 18, 0.1)"},
+                {'range': [8, 10], 'color': "rgba(39, 174, 96, 0.1)"}
             ]
         }
     ))
-    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=300)
+    fig.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
-
 def draw_radar_chart(data_dict):
-    """Строит радарную диаграмму компетенций."""
+    """Визуализация матрицы компетенций (Радар)."""
     categories = list(data_dict.keys())
     values = list(data_dict.values())
-
     categories.append(categories[0])
     values.append(values[0])
 
     fig = go.Figure(data=go.Scatterpolar(
-        r=values,
-        theta=categories,
-        fill='toself',
-        line_color='#2E86C1',
-        fillcolor='rgba(46, 134, 193, 0.4)'
+        r=values, theta=categories, fill='toself',
+        line_color='#2E86C1', fillcolor='rgba(46, 134, 193, 0.4)'
     ))
     fig.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0, 10])),
-        showlegend=False,
-        margin=dict(l=40, r=40, t=40, b=40)
+        margin=dict(l=40, r=40, t=20, b=20), height=300
     )
     st.plotly_chart(fig, use_container_width=True)
 
 
 # ==========================================
-# 3. ИНТЕГРАЦИЯ GIGACHAT И ПРОМПТЫ (IRT & NLP)
+# 3. ИНТЕГРАЦИЯ GIGACHAT И ПРОМПТЫ
 # ==========================================
 
 class GigaChatIntegration:
     def __init__(self, auth_key):
         self.auth_key = auth_key
         self.token = self._get_token()
-        self.base_url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+        self.url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
 
     def _get_token(self):
         url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
@@ -159,111 +147,89 @@ class GigaChatIntegration:
             'RqUID': str(uuid.uuid4()),
             'Authorization': f'Basic {self.auth_key}'
         }
-        res = requests.post(url, headers=headers, data={'scope': 'GIGACHAT_API_PERS'}, verify=False)
-        if res.status_code == 200:
+        try:
+            res = requests.post(url, headers=headers, data={'scope': 'GIGACHAT_API_PERS'}, verify=False)
             return res.json().get('access_token')
-        return None
+        except: return None
 
     def ask(self, system_prompt, history):
         if not self.token: return "Ошибка авторизации."
-        messages = [{"role": "system", "content": system_prompt}] + history
         headers = {'Authorization': f'Bearer {self.token}', 'Content-Type': 'application/json'}
-        payload = {"model": "GigaChat", "messages": messages, "temperature": 0.6}
-        res = requests.post(self.base_url, headers=headers, json=payload, verify=False)
-        if res.status_code == 200:
-            return res.json()['choices'][0]['message']['content']
-        return "Ошибка API."
+        payload = {
+            "model": "GigaChat",
+            "messages": [{"role": "system", "content": system_prompt}] + history,
+            "temperature": 0.6
+        }
+        res = requests.post(self.url, headers=headers, json=payload, verify=False)
+        return res.json()['choices'][0]['message']['content'] if res.status_code == 200 else "Ошибка API."
 
 
-def get_adaptive_question_prompt(role, pos, current_step, max_steps):
-    """Адаптивная генерация (IRT): ИИ задает короткие, точечные вопросы без воды."""
-    base = f"Ты — строгий Технический Интервьюер. Вакансия: {pos}. Шаг интервью: {current_step} из {max_steps}."
-
-    return f"""{base}
-    ТВОЯ ЗАДАЧА: Проанализировать предыдущий ответ и задать следующий вопрос. 
+def get_adaptive_question_prompt(role, pos, step, max_steps):
+    """Генерация следующего вопроса в зависимости от роли."""
+    if role == "Соискатель":
+        return f"""Ты — строгий Технический Интервьюер. Вакансия: {pos}. Шаг: {step}/{max_steps}.
+        ЗАДАЧА: Задай ОДИН короткий технический вопрос. Если прошлый ответ сильный — усложняй, если слабый — проверяй базу.
+        ПРАВИЛО: Выводи ТОЛЬКО текст вопроса (одно предложение). Без приветствий, рассуждений и эмодзи."""
     
-    ПРАВИЛА ГЕНЕРАЦИИ ВОПРОСА (НАРУШЕНИЕ КАРАЕТСЯ СБОЕМ СИСТЕМЫ):
-    1. Задай ТОЛЬКО ОДИН точечный вопрос, требующий понимания предметной области.
-    2. Вопрос должен быть сформулирован так, чтобы кандидат мог ответить на него максимум одним-двумя предложениями.
-    3. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать свои рассуждения, оценивать предыдущий ответ вслух, использовать эмодзи, писать приветствия или слова вроде "🤖 ИИ:", "Вопрос:".
-    4. Если кандидат отвечает слабо — задай базовый вопрос. Если сильно — усложни уровень (углубление в архитектуру/процессы).
-    
-    ВЫВОД: СТРОГО текст вопроса (одно предложение) и больше ничего."""
-
+    else: # Роль: Сотрудник (Коучинговый подход)
+        scenario = [
+            "Знакомство: спроси текущую роль и ключевую ответственность.",
+            "Current State: узнай оценку последнего квартала. Что драйвит, а что забирает энергию?",
+            "Competencies (STAR): попроси пример самого сложного/успешного кейса за полгода.",
+            "Weaknesses/Growth: спроси, какую ОДНУ задачу он бы делегировал навсегда?",
+            "Future: узнай о карьерных амбициях на 1-2 года.",
+            "Deep Dive: задай уточняющий вопрос по любой из озвученных тем роста."
+        ]
+        curr_task = scenario[min(step-1, len(scenario)-1)]
+        return f"""Ты — Старший HR-бизнес-партнер и карьерный коуч. Сотрудник: {pos}. Шаг: {step}/{max_steps}.
+        ТВОЙ ТЕКУЩИЙ ЭТАП: {curr_task}
+        ПРАВИЛА: 
+        1. Веди диалог эмпатично, используя активное слушание.
+        2. Задавай строго ПО ОДНОМУ вопросу.
+        3. Не используй эмодзи и вступительные фразы типа '🤖 ИИ:'. 
+        4. Выводи только текст вопроса."""
 
 def get_final_analysis_prompt(role, pos, transcript):
-    """Многомерный анализ: Строгий академический стиль без эмодзи."""
+    """Генерация итогового аналитического отчета."""
+    base_rules = "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать эмодзи. Стиль: строгий академический бизнес-аудит."
     
-    base_rules = """
-    [ПРАВИЛА ЖЕСТКОГО АУДИТА — КРИТИЧЕСКИ ВАЖНО!]
-    1. Оценивай ТОЛЬКО текст, написанный после слов "Ответ Кандидата:". 
-    2. ЗАПРЕЩЕНО использовать термины из текста "Вопрос ИИ:" для оценки знаний кандидата.
-    3. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать эмодзи (смайлики) и неформальную лексику. Используй строгий академический деловой стиль.
-    4. Если кандидат отвечает отписками или не использует профессиональные термины — это САБОТАЖ и НОЛЬ ЗНАНИЙ.
-    """
-
     if role == "Соискатель":
-        return f"""Ты — бескомпромиссный Технический Аудитор. Проведи аудит стенограммы интервью на позицию: {pos}.
-
-[СТЕНОГРАММА ИНТЕРВЬЮ]
-{transcript}
-[КОНЕЦ СТЕНОГРАММЫ]
-{base_rules}
-
-[АЛГОРИТМ ПРИНЯТИЯ РЕШЕНИЯ]
-ЕСЛИ большинство ответов — отписки или бессмысленные фразы:
-Выведи СТРОГО этот текст (без эмоций):
-Антифрод-Радар: ПРОВАЛЕН (Саботаж/Отписки).
-Лексический профиль: Низкая деловая культура.
-Фактические Компетенции: 0 из 10. Кандидат не дал ни одного содержательного технического ответа.
-ИТОГОВЫЙ ВЕРДИКТ: ОТКЛОНЕН (Дисквалификация).
-
-ЕСЛИ ответы развернутые и профессиональные:
-Сделай стандартный отчет (Антифрод, Лексика, Оценка компетенций с цитатами, Итоговый Вердикт). Укажи приблизительный уровень компетенций (Слабый, Средний или Сильный).
-
-[ОБЯЗАТЕЛЬНЫЙ JSON В КОНЦЕ]
-```json
-{{
-    "Hard_Skills": 0,
-    "Когнитивная_Гибкость": 0,
-    "Уверенность_и_Лидерство": 0,
-    "Профессиональная_Этика": 0,
-    "Системное_Мышление": 0
-}}
-```"""
-    else:
-        return f"""Ты — Эксперт по карьерному развитию. Проанализируй диалог сотрудника ({pos}).
-        
-[СТЕНОГРАММА ИНТЕРВЬЮ]
-{transcript}
-[КОНЕЦ СТЕНОГРАММЫ]
-{base_rules}
-
-Сделай подробный текстовый отчет в академическом стиле:
-Индекс готовности к повышению: (Укажи уровень: Слабый, Средний или Сильный)
-Лексический профиль:
-Карьерный Action Plan:
-
-В конце отчета выведи JSON-блок (оценки 0-10):
-```json
-{{
-    "Проактивность": 5,
-    "Бизнес_Видение": 5,
-    "Стрессоустойчивость": 5,
-    "Мотивация": 5,
-    "Самостоятельность": 5
-}}
-```"""
+        return f"""Ты — Технический Аудитор. Проведи жесткий аудит стенограммы на позицию {pos}.
+        [СТЕНОГРАММА] {transcript} [/КОНЕЦ СТЕНОГРАММЫ]
+        {base_rules}
+        ЕСЛИ ответы — отписки (1-3 слова) или саботаж: Выведи вердикт 'ПРОВАЛЕН (Саботаж)'.
+        ИНАЧЕ: Оцени профиль компетенций и дай вердикт.
+        В конце выведи JSON с оценками 0-10: 
+        ```json
+        {{"Hard_Skills": 0, "Когнитивная_Гибкость": 0, "Уверенность": 0, "Этика": 0, "Системное_Мышление": 0}}
+        ```"""
+    
+    else: # Роль: Сотрудник
+        return f"""Ты — Старший HR-бизнес-партнер. Проанализируй интервью сотрудника ({pos}).
+        [СТЕНОГРАММА] {transcript} [/КОНЕЦ СТЕНОГРАММЫ]
+        {base_rules}
+        СОСТАВЬ ОТЧЕТ ПО ШАБЛОНУ:
+        - Профиль сотрудника: (Должность, фокус)
+        - Психологический профиль: (Энергия, вовлеченность, риски выгорания)
+        - Матрица компетенций: (Развитые навыки и зоны внимания)
+        - Точки роста: (Конкретные паттерны или навыки)
+        - Карьерный трек: (Вертикальный/горизонтальный рост)
+        - Action Plan: (3 шага на 3 месяца)
+        В конце выведи JSON с оценками 0-10:
+        ```json
+        {{"Проактивность": 0, "Бизнес_Видение": 0, "Стрессоустойчивость": 0, "Мотивация": 0, "Самостоятельность": 0}}
+        ```"""
 
 
 # ==========================================
-# 4. ПОЛЬЗОВАТЕЛЬСКИЙ ИНТЕРФЕЙС (ЧАТ-ФОРМАТ)
+# 4. ИНТЕРФЕЙС И ЛОГИКА ПРИЛОЖЕНИЯ
 # ==========================================
 
 def main():
-    st.set_page_config(page_title="Адаптивная платформа оценки", layout="centered")
+    st.set_page_config(page_title="HR-Tech Adaptive Platform", layout="centered")
     init_db()
 
+    # Секреты
     AUTH_KEY = st.secrets.get("GIGACHAT_KEY", "")
     giga = GigaChatIntegration(AUTH_KEY)
 
@@ -272,204 +238,123 @@ def main():
         return
 
     inject_proctoring_js()
-
-    st.title("Интеллектуальная система оценки")
+    st.title("Система автоматизированной оценки")
 
     if 'step' not in st.session_state:
-        st.session_state.step = "role_selection"
-        st.session_state.messages = []
-        st.session_state.max_questions = 0
-        st.session_state.q_count = 0
-        st.session_state.start_time = 0
+        st.session_state.update({'step': "role_selection", 'messages': [], 'q_count': 0})
 
+    # ЭТАП 1: Выбор роли
     if st.session_state.step == "role_selection":
-        st.markdown("Выберите профиль для начала адаптивного интервью:")
-        col1, col2 = st.columns(2)
-        if col1.button("Соискатель", use_container_width=True):
-            st.session_state.role = "Соискатель"
-            st.session_state.max_questions = 8
-            st.session_state.step = "pos_input"
+        st.subheader("Выберите тип оценки:")
+        c1, c2 = st.columns(2)
+        if c1.button("Наём (Соискатель)", use_container_width=True):
+            st.session_state.update({'role': "Соискатель", 'max_q': 8, 'step': "pos_input"})
             st.rerun()
-        if col2.button("Сотрудник", use_container_width=True):
-            st.session_state.role = "Сотрудник"
-            st.session_state.max_questions = 4
-            st.session_state.step = "pos_input"
+        if c2.button("Развитие (Сотрудник)", use_container_width=True):
+            st.session_state.update({'role': "Сотрудник", 'max_q': 6, 'step': "pos_input"})
             st.rerun()
 
+    # ЭТАП 2: Ввод должности
     elif st.session_state.step == "pos_input":
-        label = "Укажите целевую вакансию:" if st.session_state.role == "Соискатель" else "Ваша текущая должность:"
+        label = "Целевая вакансия:" if st.session_state.role == "Соискатель" else "Текущая должность:"
         pos = st.text_input(label)
-        if st.button("Запустить адаптивное интервью"):
-            if pos.strip():
-                st.session_state.pos = pos
-                st.session_state.step = "interview"
-                st.session_state.q_count = 1
+        if st.button("Начать интервью") and pos.strip():
+            st.session_state.update({'pos': pos, 'step': "interview", 'q_count': 1, 'start_t': time.time()})
+            with st.spinner("GigaChat готовит первый вопрос..."):
+                q = giga.ask(get_adaptive_question_prompt(st.session_state.role, pos, 1, st.session_state.max_q), [])
+                st.session_state.messages.append({"role": "assistant", "content": q})
+            st.rerun()
 
-                with st.spinner("Анализ профиля..."):
-                    prompt = get_adaptive_question_prompt(st.session_state.role, pos, 1, st.session_state.max_questions)
-                    first_q = giga.ask(prompt, [])
-                    st.session_state.messages.append({"role": "assistant", "content": first_q})
-                    st.session_state.start_time = time.time()
-                st.rerun()
-
+    # ЭТАП 3: Интервью
     elif st.session_state.step == "interview":
-        time_limit = 90 if st.session_state.role == "Соискатель" else 120
-        elapsed = time.time() - st.session_state.start_time
-        remaining = max(0, time_limit - int(elapsed))
+        for m in st.session_state.messages:
+            with st.chat_message(m["role"]): st.write(m["content"])
 
-        for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]):
-                st.write(msg["content"])
-
-        st.progress(remaining / time_limit)
-        st.caption(f"Прогресс: вопрос {st.session_state.q_count} из {st.session_state.max_questions} | Время: {remaining} сек.")
-
-        user_input = st.chat_input("Напишите ответ...")
-
-        if remaining <= 0 and not user_input:
-            user_input = "[ПРОКТОРИНГ: Кандидат не уложился в отведенное время]"
-
+        user_input = st.chat_input("Ваш ответ...")
         if user_input:
             st.session_state.messages.append({"role": "user", "content": user_input})
             st.session_state.q_count += 1
-
-            if st.session_state.q_count <= st.session_state.max_questions:
-                with st.spinner("Анализ ответа и генерация следующего кейса..."):
-                    prompt = get_adaptive_question_prompt(st.session_state.role, st.session_state.pos,
-                                                          st.session_state.q_count, st.session_state.max_questions)
-                    history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-                    next_q = giga.ask(prompt, history)
-                    st.session_state.messages.append({"role": "assistant", "content": next_q})
-                    st.session_state.start_time = time.time()
-                    st.rerun()
+            if st.session_state.q_count <= st.session_state.max_q:
+                with st.spinner("Анализ ответа..."):
+                    hist = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+                    q = giga.ask(get_adaptive_question_prompt(st.session_state.role, st.session_state.pos, st.session_state.q_count, st.session_state.max_q), hist)
+                    st.session_state.messages.append({"role": "assistant", "content": q})
+                st.rerun()
             else:
                 st.session_state.step = "analysis"
                 st.rerun()
 
-        time.sleep(1)
-        st.rerun()
-
+    # ЭТАП 4: Анализ
     elif st.session_state.step == "analysis":
-        with st.spinner("Проведение изолированного многомерного анализа..."):
-            transcript_text = ""
-            for m in st.session_state.messages:
-                speaker = "Вопрос ИИ" if m["role"] == "assistant" else "Ответ Кандидата"
-                transcript_text += f"{speaker}:\n{m['content']}\n\n"
+        with st.spinner("Изолированный аудит GigaChat..."):
+            transcript = "".join([f"{'Вопрос ИИ' if m['role']=='assistant' else 'Ответ Кандидата'}: {m['content']}\n" for m in st.session_state.messages])
+            raw = giga.ask(get_final_analysis_prompt(st.session_state.role, st.session_state.pos, transcript), [])
             
-            prompt = get_final_analysis_prompt(st.session_state.role, st.session_state.pos, transcript_text)
-            raw_analysis = giga.ask(prompt, []) 
-
             radar_data = {}
-            json_match = re.search(r'```json\n(.*?)\n```', raw_analysis, re.DOTALL)
+            json_match = re.search(r'```json\n(.*?)\n```', raw, re.DOTALL)
             if json_match:
-                try:
-                    radar_data = json.loads(json_match.group(1))
-                    text_analysis = raw_analysis.replace(json_match.group(0), "").strip()
-                except:
-                    text_analysis = raw_analysis
-            else:
-                text_analysis = raw_analysis
+                radar_data = json.loads(json_match.group(1))
+                text_report = raw.replace(json_match.group(0), "").strip()
+            else: text_report = raw
 
-            report_id = save_report(st.session_state.role, st.session_state.pos,
-                                    st.session_state.messages, text_analysis, radar_data)
-
-            st.success("Оценка успешно завершена.")
-            st.markdown("### Данные сохранены")
-            st.write("Пожалуйста, скопируйте ссылку ниже и передайте её вашему HR-менеджеру для проверки результатов:")
-            
-            # Замените на ваш реальный домен в Streamlit Cloud
-            base_url = "https://your-app-domain.streamlit.app" 
-            report_url = f"{base_url}/?report={report_id}"
-            
-            st.code(report_url, language="text")
-            
-            st.divider()
-            
-            if st.button("Завершить сессию и вернуться на главную", use_container_width=True):
-                for key in list(st.session_state.keys()): del st.session_state[key]
+            rid = save_report(st.session_state.role, st.session_state.pos, st.session_state.messages, text_report, radar_data)
+            st.success("Оценка завершена!")
+            st.write("Передайте эту ссылку вашему HR-менеджеру:")
+            st.code(f"https://your-app.streamlit.app/?report={rid}")
+            if st.button("На главную"):
+                for k in list(st.session_state.keys()): del st.session_state[k]
                 st.rerun()
 
 
 # ----------------------------------------
-# КАБИНЕТ HR (АНАЛИТИЧЕСКИЙ ДАШБОРД)
+# КАБИНЕТ HR
 # ----------------------------------------
 def show_hr_view(report_id):
-    st.title("Аналитический HR-Дашборд")
+    st.title("HR-Дашборд Аналитики")
     
-    # 1. Слой безопасности HR (ПИН-КОД из секретов)
-    if 'hr_authorized' not in st.session_state:
-        st.session_state.hr_authorized = False
+    if 'hr_auth' not in st.session_state: st.session_state.hr_auth = False
 
-    if not st.session_state.hr_authorized:
-        st.warning("Внимание: Раздел защищен. Доступ только для сотрудников отдела кадров.")
-        
-        expected_pin = st.secrets.get("HR_PIN") 
-
-        if not expected_pin:
-            st.error("Ошибка конфигурации: ПИН-код администратора не установлен в настройках секретов.")
+    if not st.session_state.hr_auth:
+        expected = st.secrets.get("HR_PIN")
+        if not expected:
+            st.error("Ошибка: ПИН-код не настроен.")
             return
-
-        pin_code = st.text_input("Введите секретный PIN-код для доступа:", type="password")
-        
-        if st.button("Подтвердить"):
-            if pin_code == expected_pin:
-                st.session_state.hr_authorized = True
+        pin = st.text_input("Введите PIN-код доступа:", type="password")
+        if st.button("Войти"):
+            if pin == expected:
+                st.session_state.hr_auth = True
                 st.rerun()
-            else:
-                st.error("Ошибка верификации: Неверный PIN-код.")
+            else: st.error("Неверный код.")
         return
 
-    # 2. Отрисовка Дашборда после авторизации
     data = get_report(report_id)
     if data:
-        role, pos, history_json, analysis, radar_json = data
-        st.success("Верификация пройдена. Данные защищены.")
+        role, pos, hist_j, analysis, radar_j = data
+        st.markdown(f"### Результат: {role}")
+        st.info(f"**Позиция:** {pos}")
 
-        col1, col2 = st.columns(2)
-        col1.metric("Тип оценки", role)
-        with col2:
-            st.markdown(f"**Целевая позиция:**<br>{pos}", unsafe_allow_html=True)
-
-        st.divider()
-
-        radar_data = json.loads(radar_json)
+        radar_data = json.loads(radar_j)
         if radar_data:
-            avg_score = sum(radar_data.values()) / len(radar_data) if radar_data else 0
-            
-            col_chart1, col_chart2 = st.columns(2)
-            with col_chart1:
-                draw_gauge_chart(avg_score)
-            with col_chart2:
-                draw_radar_chart(radar_data)
+            c1, c2 = st.columns(2)
+            with c1: draw_gauge_chart(sum(radar_data.values())/len(radar_data))
+            with c2: draw_radar_chart(radar_data)
 
-        st.markdown("### Заключение ИИ-Аудитора")
-        
-        st.download_button(
-            label="📄 Скачать текстовый отчет",
-            data=f"ПОЗИЦИЯ: {pos}\n\nЗАКЛЮЧЕНИЕ:\n{analysis}",
-            file_name=f"HR_Report_{report_id[:8]}.txt",
-            mime="text/plain"
-        )
-        
+        st.markdown("### Аналитическое заключение")
         st.markdown(analysis)
 
-        st.divider()
-        with st.expander("Стенограмма адаптивного интервью (Чат)"):
-            messages = json.loads(history_json)
-            for msg in messages:
-                if msg["role"] == "assistant":
-                    st.markdown(f"**Система:** {msg['content']}")
-                else:
-                    if "ПРОКТОРИНГ" in msg["content"]:
-                        st.error(f"**Кандидат:** {msg['content']}")
-                    else:
-                        st.info(f"**Кандидат:** {msg['content']}")
-    else:
-        st.error("Отчет не найден в базе данных.")
-        if st.button("На главную"):
-            st.query_params.clear()
-            st.rerun()
+        # Формирование файла для скачивания
+        messages = json.loads(hist_j)
+        transcript_text = "\n".join([f"{'Система' if m['role']=='assistant' else 'Кандидат'}: {m['content']}" for m in messages])
+        full_report = f"ПОЗИЦИЯ: {pos}\n\nЗАКЛЮЧЕНИЕ:\n{analysis}\n\n{'='*30}\nСТЕНОГРАММА:\n{transcript_text}"
+        
+        st.download_button("📄 Скачать полный отчет (+стенограмма)", full_report, file_name=f"Report_{report_id[:8]}.txt")
 
+        with st.expander("Посмотреть стенограмму чата"):
+            for m in messages:
+                label = "🤖 Система" if m['role']=='assistant' else "👤 Кандидат"
+                st.write(f"**{label}:** {m['content']}")
+    else:
+        st.error("Отчет не найден.")
 
 if __name__ == "__main__":
     main()
