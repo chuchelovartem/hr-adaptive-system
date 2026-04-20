@@ -264,8 +264,8 @@ def main():
             rid = save_report(st.session_state.role, st.session_state.pos, st.session_state.messages, text_report, radar_data, cheat_count)
             st.success("Интервью завершено.")
             
-            # --- ВАЖНО: ЗАМЕНИ ССЫЛКУ НА СВОЮ РЕАЛЬНУЮ! ---
-            app_domain = "https://ТВОЙ-АДРЕС.streamlit.app"
+            # Интегрирована твоя реальная ссылка
+            app_domain = "https://adaptive-hr-system.streamlit.app"
             
             st.code(f"{app_domain}/?report={rid}")
             if st.button("На главную"):
