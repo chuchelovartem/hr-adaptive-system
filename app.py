@@ -14,7 +14,6 @@ import plotly.graph_objects as go
 # ==========================================
 
 def inject_proctoring_js():
-    """JS для блокировки действий и подсчета уходов с вкладки."""
     js_code = """
     <script>
     let cheatCount = parseInt(new URL(window.parent.location.href).searchParams.get('cheat_count') || '0');
@@ -131,20 +130,28 @@ class GigaChatIntegration:
 
 def get_adaptive_question_prompt(role, pos, step, max_steps):
     if role == "Соискатель":
-        return f"""Ты — жесткий технический эксперт. Вакансия: {pos}. 
+        return f"""Ты — строгий технический эксперт. Ты проводишь собеседование на позицию: {pos}.
+        ВНИМАНИЕ: ПОЛЬЗОВАТЕЛЬ — ЭТО КАНДИДАТ. Его реплики — это ответы на твои вопросы на экзамене.
+        
         ШАГ: {step}/{max_steps}.
-        ЗАДАЧА: Сформулировать ОДИН практический вопрос.
-        🚨 ПРАВИЛО: Выведи ТОЛЬКО текст вопроса. Никаких вводных слов и пояснений!
-        ТРЕБОВАНИЯ: Ответ на 1-2 предложения. Формат: "Представь ситуацию...", "Что будет, если...". Без базовой теории."""
+        
+        ТВОЯ ЗАДАЧА: Прочитай предыдущий ответ кандидата и задай ОДИН следующий практический вопрос.
+        
+        🚨 КРИТИЧЕСКИЕ ПРАВИЛА (ШТРАФ ЗА НАРУШЕНИЕ):
+        1. ВЫВЕДИ ТОЛЬКО САМ ВОПРОС. Ни единого слова больше!
+        2. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать обратную связь (не пиши "Правильно", "Почти верно", "Уточни", "Вот другой вариант"). Ты на экзамене, а не на обучении!
+        3. ЗАПРЕЩЕНО пояснять, зачем ты задаешь этот вопрос.
+        4. Формат вопроса: "Представь ситуацию...", "Что будет, если...". Без базовой теории."""
     else:
         scenario = ["Знакомство и ответственность.", "Current State (энергия).", "Competencies (STAR).", "Weaknesses.", "Future.", "Deep Dive."]
         curr_task = scenario[min(step-1, len(scenario)-1)]
-        return f"""Ты — Старший HR-бизнес-партнер и коуч. Сотрудник: {pos}. Шаг: {step}/{max_steps}.
-        ЭТАП: {curr_task}. 🚨 ПРАВИЛО: Выведи ТОЛЬКО сам вопрос без вступлений."""
+        return f"""Ты — HR-коуч. Сотрудник: {pos}. Шаг: {step}/{max_steps}. Этап: {curr_task}.
+        ВНИМАНИЕ: ПОЛЬЗОВАТЕЛЬ — ЭТО СОТРУДНИК.
+        🚨 КРИТИЧЕСКОЕ ПРАВИЛО: Выведи ТОЛЬКО один вопрос. Без вступлений, без оценки его прошлых слов ("Отлично", "Понятно" - ЗАПРЕЩЕНО)."""
 
 def get_final_analysis_prompt(role, pos, transcript, cheat_count):
     base_rules = "Стиль: профессиональный HR-аудит. Запрещено использовать эмодзи."
-    proctoring = f"\nВНИМАНИЕ: Кандидат переключал вкладки {cheat_count} раз! Отрази это в рисках." if cheat_count > 0 else ""
+    proctoring = f"\nВНИМАНИЕ: Кандидат переключал вкладки {cheat_count} раз! Это признак списывания. Отрази это в рисках." if cheat_count > 0 else ""
     
     if role == "Соискатель":
         return f"""Ты — HR-директор. Проведи аудит интервью на позицию {pos}.
@@ -203,26 +210,22 @@ def main():
             with st.spinner("Генерация первого вопроса..."):
                 q = giga.ask(get_adaptive_question_prompt(st.session_state.role, pos, 1, st.session_state.max_q), [])
                 st.session_state.messages.append({"role": "assistant", "content": q})
-                st.session_state.start_time = time.time() # Запуск таймера
+                st.session_state.start_time = time.time()
             st.rerun()
 
     elif st.session_state.step == "interview":
-        # --- ЛОГИКА ТАЙМЕРА ---
         time_limit = 90 if st.session_state.role == "Соискатель" else 120
         elapsed = time.time() - st.session_state.start_time
         remaining = max(0, time_limit - int(elapsed))
 
-        # Отрисовка чата
         for m in st.session_state.messages:
             with st.chat_message(m["role"]): st.write(m["content"])
         
-        # Визуализация таймера
         st.progress(remaining / time_limit)
         st.caption(f"Вопрос {st.session_state.q_count} из {st.session_state.max_q} | Осталось времени: {remaining} сек.")
 
         user_input = st.chat_input("Ваш лаконичный ответ...")
         
-        # Авто-ответ при истечении времени
         if remaining <= 0 and not user_input:
             user_input = "[ПРОКТОРИНГ: Кандидат не уложился в отведенное время]"
 
@@ -234,13 +237,12 @@ def main():
                     hist = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
                     q = giga.ask(get_adaptive_question_prompt(st.session_state.role, st.session_state.pos, st.session_state.q_count, st.session_state.max_q), hist)
                     st.session_state.messages.append({"role": "assistant", "content": q})
-                    st.session_state.start_time = time.time() # Сброс таймера для нового вопроса
+                    st.session_state.start_time = time.time() 
                 st.rerun()
             else:
                 st.session_state.step = "analysis"
                 st.rerun()
 
-        # Обновление каждую секунду для плавного таймера
         time.sleep(1)
         st.rerun()
 
@@ -261,7 +263,11 @@ def main():
 
             rid = save_report(st.session_state.role, st.session_state.pos, st.session_state.messages, text_report, radar_data, cheat_count)
             st.success("Интервью завершено.")
-            st.code(f"https://your-app.streamlit.app/?report={rid}")
+            
+            # --- ВАЖНО: ЗАМЕНИ ССЫЛКУ НА СВОЮ РЕАЛЬНУЮ! ---
+            app_domain = "https://ТВОЙ-АДРЕС.streamlit.app"
+            
+            st.code(f"{app_domain}/?report={rid}")
             if st.button("На главную"):
                 st.query_params.clear()
                 for k in list(st.session_state.keys()): del st.session_state[k]
