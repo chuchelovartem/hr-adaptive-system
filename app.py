@@ -228,72 +228,7 @@ def main():
             raw = giga.ask(get_final_analysis_prompt(st.session_state.role, st.session_state.pos, transcript, cheat_count), [])
             
             radar_data = {}
-            try:
-                json_str = re.search(r'\{.*?\}', raw, re.DOTALL).group()
-                radar_data = json.loads(json_str)
-                text_report = raw.replace(json_str, "").replace("```json", "").replace("```", "").strip()
-            except:
-                text_report = raw
-                if st.session_state.role == "Соискатель":
-                    radar_data = {"Техническая_Точность": 0, "Скорость_Мышления": 0, "Практический_Опыт": 0, "Лаконичность": 0, "Устойчивость_к_проверке": 0}
-                else:
-                    radar_data = {"Проактивность": 0, "Бизнес_Видение": 0, "Стрессоустойчивость": 0, "Мотивация": 0, "Самостоятельность": 0}
+            json_match = re.search(r'
+http://googleusercontent.com/immersive_entry_chip/0
 
-            rid = save_report(st.session_state.role, st.session_state.pos, st.session_state.messages, text_report, radar_data, cheat_count)
-            st.success("Интервью завершено.")
-            app_domain = "https://adaptive-hr-system.streamlit.app"
-            st.code(f"{app_domain}/?report={rid}")
-            if st.button("На главную"):
-                st.query_params.clear()
-                for k in list(st.session_state.keys()): del st.session_state[k]
-                st.rerun()
-
-def show_hr_view(report_id):
-    st.title("HR-Аналитика и Прокторинг")
-    expected = st.secrets.get("HR_PIN")
-    if 'hr_auth' not in st.session_state: st.session_state.hr_auth = False
-    
-    if not st.session_state.hr_auth:
-        pin = st.text_input("Введите PIN-код:", type="password")
-        if st.button("Войти") and pin == expected:
-            st.session_state.hr_auth = True
-            st.rerun()
-        return
-
-    data = get_report(report_id)
-    if data:
-        role, pos, hist_j, analysis, radar_j, cheat_count = data
-        st.markdown(f"### {role}: {pos}")
-        
-        st.divider()
-        if role == "Соискатель":
-            m1, m2 = st.columns(2)
-            color = "inverse" if cheat_count > 0 else "normal"
-            m1.metric("Переключение вкладок", f"{cheat_count} раз", delta="🚨 Риск" if cheat_count > 0 else "✅ Ок", delta_color=color)
-            m2.metric("Контроль буфера", "JS-Блокировка")
-        st.divider()
-        
-        radar_data = json.loads(radar_j)
-        if radar_data:
-            c1, c2 = st.columns(2)
-            with c1: draw_gauge_chart(sum(radar_data.values())/len(radar_data))
-            with c2: draw_radar_chart(radar_data)
-        st.markdown(analysis)
-        
-        st.divider()
-        with st.expander("Стенограмма адаптивного интервью (Просмотр в браузере)"):
-            messages = json.loads(hist_j)
-            for msg in messages:
-                if msg["role"] == "assistant":
-                    st.markdown(f"**Система:** {msg['content']}")
-                else:
-                    if "ПРОКТОРИНГ" in msg["content"]:
-                        st.error(f"**Кандидат:** {msg['content']}")
-                    else:
-                        st.info(f"**Кандидат:** {msg['content']}")
-        
-        transcript_text = "\n".join([f"{'Система' if m['role']=='assistant' else 'Кандидат'}: {m['content']}" for m in messages])
-        st.download_button("Скачать отчет", f"ОТЧЕТ: {pos}\n\nНАРУШЕНИЯ: {cheat_count}\n\n{analysis}\n\nСТЕНОГРАММА:\n{transcript_text}")
-
-if __name__ == "__main__":
-    main()
+Архитектура отполирована до блеска. Готов ли ты теперь зафиксировать актуальность нашего исследования и прописать четкий научный аппарат для текста Введения?
