@@ -100,7 +100,7 @@ def draw_gauge_chart(score):
         mode="gauge+number",
         value=score,
         domain={'x': [0, 1], 'y': [0, 1]},
-        title={'text': f"Общий уровень компетенций: {level}", 'font': {'size': 20}},
+        title={'text': f"Общий уровень: {level}", 'font': {'size': 20}},
         gauge={
             'axis': {'range': [0, 10], 'tickwidth': 1, 'tickcolor': "darkblue"},
             'bar': {'color': color},
@@ -264,7 +264,7 @@ def main():
     st.set_page_config(page_title="Адаптивная платформа оценки", layout="centered")
     init_db()
 
-    AUTH_KEY = st.secrets.get("GIGACHAT_KEY", "ВАШ_КЛЮЧ")
+    AUTH_KEY = st.secrets.get("GIGACHAT_KEY", "")
     giga = GigaChatIntegration(AUTH_KEY)
 
     if "report" in st.query_params:
@@ -377,7 +377,7 @@ def main():
             st.markdown("### Данные сохранены")
             st.write("Пожалуйста, скопируйте ссылку ниже и передайте её вашему HR-менеджеру для проверки результатов:")
             
-            # Генерация абсолютной ссылки (можно заменить на ваш реальный домен)
+            # Замените на ваш реальный домен в Streamlit Cloud
             base_url = "https://your-app-domain.streamlit.app" 
             report_url = f"{base_url}/?report={report_id}"
             
@@ -396,19 +396,20 @@ def main():
 def show_hr_view(report_id):
     st.title("Аналитический HR-Дашборд")
     
-    # 1. Слой безопасности HR (ПИН-КОД)
+    # 1. Слой безопасности HR (ПИН-КОД из секретов)
     if 'hr_authorized' not in st.session_state:
         st.session_state.hr_authorized = False
 
     if not st.session_state.hr_authorized:
         st.warning("Внимание: Раздел защищен. Доступ только для сотрудников отдела кадров.")
-        pin_code = st.text_input("Введите PIN-код для доступа (по умолчанию: 1234)", type="password")
-        # Пытаемся получить ПИН из секретов, если его нет — доступ будет невозможен
+        
         expected_pin = st.secrets.get("HR_PIN") 
 
         if not expected_pin:
-        st.error("Ошибка конфигурации: ПИН-код администратора не установлен.")
-        return
+            st.error("Ошибка конфигурации: ПИН-код администратора не установлен в настройках секретов.")
+            return
+
+        pin_code = st.text_input("Введите секретный PIN-код для доступа:", type="password")
         
         if st.button("Подтвердить"):
             if pin_code == expected_pin:
@@ -426,7 +427,6 @@ def show_hr_view(report_id):
 
         col1, col2 = st.columns(2)
         col1.metric("Тип оценки", role)
-        # Использование markdown для поддержки длинных названий с переносом строк
         with col2:
             st.markdown(f"**Целевая позиция:**<br>{pos}", unsafe_allow_html=True)
 
@@ -434,7 +434,6 @@ def show_hr_view(report_id):
 
         radar_data = json.loads(radar_json)
         if radar_data:
-            # Расчет среднего балла для спидометра
             avg_score = sum(radar_data.values()) / len(radar_data) if radar_data else 0
             
             col_chart1, col_chart2 = st.columns(2)
@@ -445,7 +444,6 @@ def show_hr_view(report_id):
 
         st.markdown("### Заключение ИИ-Аудитора")
         
-        # Добавляем возможность выгрузки отчета в txt (Альтернатива PDF для легкого скачивания)
         st.download_button(
             label="📄 Скачать текстовый отчет",
             data=f"ПОЗИЦИЯ: {pos}\n\nЗАКЛЮЧЕНИЕ:\n{analysis}",
@@ -460,7 +458,6 @@ def show_hr_view(report_id):
             messages = json.loads(history_json)
             for msg in messages:
                 if msg["role"] == "assistant":
-                    # Убрано эмодзи и префикс для более строгого вида
                     st.markdown(f"**Система:** {msg['content']}")
                 else:
                     if "ПРОКТОРИНГ" in msg["content"]:
