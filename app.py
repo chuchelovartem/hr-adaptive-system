@@ -13,6 +13,7 @@ def inject_proctoring_js():
     js_code = """
     <script>
     let cheatCount = parseInt(new URL(window.parent.location.href).searchParams.get('cheat_count') || '0');
+
     const blockCopyPaste = () => {
         const inputs = window.parent.document.querySelectorAll('textarea, input');
         inputs.forEach(input => {
@@ -22,6 +23,7 @@ def inject_proctoring_js():
         });
     }
     setInterval(blockCopyPaste, 1000);
+
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === 'hidden') {
             cheatCount++;
@@ -137,19 +139,19 @@ def get_final_analysis_prompt(role, pos, transcript, cheat_count):
         return f"""Ты — HR-директор. Проведи аудит интервью на позицию {pos}.
         [СТЕНОГРАММА] {transcript} [/КОНЕЦ СТЕНОГРАММЫ] {proctoring}
         ФОРМАТ: Резюме компетенций, Сильные стороны, Риски (с учетом прокторинга), Вердикт.
-        В конце JSON:
-        ```json
-        {{"Техническая_Точность": 0, "Скорость_Мышления": 0, "Практический_Опыт": 0, "Лаконичность": 0, "Устойчивость_к_проверке": 0}}
-        ```
+        В конце выведи JSON блок:
+        `""" + """``json
+        {"Техническая_Точность": 0, "Скорость_Мышления": 0, "Практический_Опыт": 0, "Лаконичность": 0, "Устойчивость_к_проверке": 0}
+        `""" + """``
         {base_rules}"""
     else:
         return f"""Ты — HR-директор. Проанализируй интервью развития ({pos}).
         [СТЕНОГРАММА] {transcript} [/КОНЕЦ СТЕНОГРАММЫ]
         СОСТАВЬ: Профиль, Психологический статус, Матрица компетенций, Точки роста, Карьерный трек, Action Plan.
-        В конце JSON:
-        ```json
-        {{"Проактивность": 0, "Бизнес_Видение": 0, "Стрессоустойчивость": 0, "Мотивация": 0, "Самостоятельность": 0}}
-        ```
+        В конце выведи JSON блок:
+        `""" + """``json
+        {"Проактивность": 0, "Бизнес_Видение": 0, "Стрессоустойчивость": 0, "Мотивация": 0, "Самостоятельность": 0}
+        `""" + """``
         {base_rules}"""
 
 def main():
@@ -228,10 +230,16 @@ def main():
             raw = giga.ask(get_final_analysis_prompt(st.session_state.role, st.session_state.pos, transcript, cheat_count), [])
             
             radar_data = {}
+            json_match = re.search(r'`{3}(?:json)?\n?(.*?)\n?`{3}', raw, re.DOTALL | re.IGNORECASE)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                match = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
+                json_str = match.group(0) if match else "{}"
+
             try:
-                json_str = re.search(r'\{.*?\}', raw, re.DOTALL).group()
                 radar_data = json.loads(json_str)
-                text_report = raw.replace(json_str, "").replace("```json", "").replace("```", "").strip()
+                text_report = raw.replace(json_str, "").replace("`"*3 + "json", "").replace("`"*3, "").strip()
             except:
                 text_report = raw
                 if st.session_state.role == "Соискатель":
@@ -241,8 +249,10 @@ def main():
 
             rid = save_report(st.session_state.role, st.session_state.pos, st.session_state.messages, text_report, radar_data, cheat_count)
             st.success("Интервью завершено.")
+            
             app_domain = "https://adaptive-hr-system.streamlit.app"
             st.code(f"{app_domain}/?report={rid}")
+            
             if st.button("На главную"):
                 st.query_params.clear()
                 for k in list(st.session_state.keys()): del st.session_state[k]
@@ -267,10 +277,8 @@ def show_hr_view(report_id):
         
         st.divider()
         if role == "Соискатель":
-            m1, m2 = st.columns(2)
             color = "inverse" if cheat_count > 0 else "normal"
-            m1.metric("Переключение вкладок", f"{cheat_count} раз", delta="🚨 Риск" if cheat_count > 0 else "✅ Ок", delta_color=color)
-            m2.metric("Контроль буфера", "JS-Блокировка")
+            st.metric("Потеря фокуса (переключение вкладок браузера)", f"{cheat_count} раз", delta="🚨 Риск списывания" if cheat_count > 0 else "✅ Ок", delta_color=color)
         st.divider()
         
         radar_data = json.loads(radar_j)
