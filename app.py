@@ -256,7 +256,7 @@ def main():
 
     elif st.session_state.step == "pos_input":
         pos = st.text_input("Укажите позицию/стек:")
-        jd_context = st.text_area("Дополнительное описание вакансии или компетенций (опционально, для точности ИИ):", height=100)
+        jd_context = st.text_area("Дополнительное описание вакансии или компетенций (опционально):", height=100)
         
         if st.button("Начать") and pos.strip():
             st.session_state.update({'pos': pos, 'jd_context': jd_context, 'step': "interview", 'q_count': 1})
