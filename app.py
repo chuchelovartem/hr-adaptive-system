@@ -36,7 +36,6 @@ def inject_proctoring_js():
     }
     setInterval(blockCopyPaste, 1000);
 
-    // Функция фиксации нарушения
     const recordCheat = () => {
         if (isReady) {
             cheatCount++;
@@ -49,12 +48,10 @@ def inject_proctoring_js():
     const parentWindow = window.parent;
     const parentDoc = window.parent.document;
 
-    // Отслеживаем сворачивание окна
     parentDoc.addEventListener("visibilitychange", () => {
         if (parentDoc.visibilityState === 'hidden') recordCheat();
     });
 
-    // Отслеживаем потерю фокуса (клик по другой вкладке или программе)
     parentWindow.addEventListener("blur", () => {
         recordCheat();
     });
@@ -142,10 +139,11 @@ class GigaChatIntegration:
             return res.json().get('access_token')
         except: return None
 
-    def ask(self, system_prompt, history):
+    # Добавлен параметр temperature с дефолтным значением 0.6
+    def ask(self, system_prompt, history, temperature=0.6):
         if not self.token: return "Ошибка авторизации."
         headers = {'Authorization': f'Bearer {self.token}', 'Content-Type': 'application/json'}
-        payload = {"model": "GigaChat", "messages": [{"role": "system", "content": system_prompt}] + history, "temperature": 0.6}
+        payload = {"model": "GigaChat", "messages": [{"role": "system", "content": system_prompt}] + history, "temperature": temperature}
         res = requests.post(self.url, headers=headers, json=payload, verify=False)
         return res.json()['choices'][0]['message']['content'] if res.status_code == 200 else "Ошибка API."
 
@@ -256,13 +254,14 @@ def main():
 
     elif st.session_state.step == "pos_input":
         pos = st.text_input("Укажите позицию/стек:")
-        jd_context = st.text_area("Дополнительное описание вакансии или компетенций (опционально):", height=100)
+        jd_context = st.text_area("Дополнительное описание вакансии или компетенций (опционально, для точности ИИ):", height=100)
         
         if st.button("Начать") and pos.strip():
             st.session_state.update({'pos': pos, 'jd_context': jd_context, 'step': "interview", 'q_count': 1})
             st.query_params.clear()
             with st.spinner("Генерация первого вопроса..."):
-                q = giga.ask(get_adaptive_question_prompt(st.session_state.role, pos, jd_context, 1, st.session_state.max_q), [])
+                # Генерация вопроса (креативность 0.6)
+                q = giga.ask(get_adaptive_question_prompt(st.session_state.role, pos, jd_context, 1, st.session_state.max_q), [], temperature=0.6)
                 st.session_state.messages.append({"role": "assistant", "content": q})
                 st.session_state.start_time = time.time()
             st.rerun()
@@ -273,112 +272,4 @@ def main():
         remaining = max(0, time_limit - int(elapsed))
 
         for m in st.session_state.messages:
-            with st.chat_message(m["role"]): st.write(m["content"])
-        
-        st.progress(remaining / time_limit)
-        st.caption(f"Вопрос {st.session_state.q_count} из {st.session_state.max_q} | Осталось времени: {remaining} сек.")
-
-        user_input = st.chat_input("Ваш лаконичный ответ...")
-        
-        if remaining <= 0 and not user_input:
-            user_input = "[ПРОКТОРИНГ: Кандидат не уложился в отведенное время]"
-
-        if user_input:
-            st.session_state.messages.append({"role": "user", "content": user_input})
-            st.session_state.q_count += 1
-            if st.session_state.q_count <= st.session_state.max_q:
-                with st.spinner("Анализ..."):
-                    hist = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-                    q = giga.ask(get_adaptive_question_prompt(st.session_state.role, st.session_state.pos, st.session_state.jd_context, st.session_state.q_count, st.session_state.max_q), hist)
-                    st.session_state.messages.append({"role": "assistant", "content": q})
-                    st.session_state.start_time = time.time() 
-                st.rerun()
-            else:
-                st.session_state.step = "analysis"
-                st.rerun()
-
-        time.sleep(1)
-        st.rerun()
-
-    elif st.session_state.step == "analysis":
-        with st.spinner("Финальный аудит..."):
-            cheat_count = int(st.query_params.get("_v_idx", 0))
-            transcript = "".join([f"{'ИИ' if m['role']=='assistant' else 'Кандидат'}: {m['content']}\n" for m in st.session_state.messages])
-            raw = giga.ask(get_final_analysis_prompt(st.session_state.role, st.session_state.pos, st.session_state.jd_context, transcript, cheat_count), [])
-            
-            radar_data = {}
-            json_match = re.search(r'`{3}(?:json)?\n?(.*?)\n?`{3}', raw, re.DOTALL | re.IGNORECASE)
-            if json_match:
-                json_str = json_match.group(1)
-            else:
-                match = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
-                json_str = match.group(0) if match else "{}"
-
-            try:
-                radar_data = json.loads(json_str)
-                text_report = raw.replace(json_str, "").replace("`"*3 + "json", "").replace("`"*3, "").strip()
-            except:
-                text_report = raw
-                if st.session_state.role == "Соискатель":
-                    radar_data = {"Техническая_Точность": 0, "Скорость_Мышления": 0, "Практический_Опыт": 0, "Лаконичность": 0, "Устойчивость_к_проверке": 0}
-                else:
-                    radar_data = {"Проактивность": 0, "Бизнес_Видение": 0, "Стрессоустойчивость": 0, "Мотивация": 0, "Самостоятельность": 0}
-
-            rid = save_report(st.session_state.role, st.session_state.pos, st.session_state.messages, text_report, radar_data, cheat_count)
-            st.success("Интервью завершено.")
-            
-            app_domain = "https://adaptive-hr-system.streamlit.app"
-            st.code(f"{app_domain}/?report={rid}")
-            
-            if st.button("На главную"):
-                st.query_params.clear()
-                for k in list(st.session_state.keys()): del st.session_state[k]
-                st.rerun()
-
-def show_hr_view(report_id):
-    st.title("HR-Аналитика и Прокторинг")
-    expected = st.secrets.get("HR_PIN")
-    if 'hr_auth' not in st.session_state: st.session_state.hr_auth = False
-    
-    if not st.session_state.hr_auth:
-        pin = st.text_input("Введите PIN-код:", type="password")
-        if st.button("Войти") and pin == expected:
-            st.session_state.hr_auth = True
-            st.rerun()
-        return
-
-    data = get_report(report_id)
-    if data:
-        role, pos, hist_j, analysis, radar_j, cheat_count = data
-        st.markdown(f"### {role}: {pos}")
-        
-        st.divider()
-        if role == "Соискатель":
-            color = "inverse" if cheat_count > 0 else "normal"
-            st.metric("Потеря фокуса (клик по другой вкладке/окну)", f"{cheat_count} раз", delta="🚨 Риск списывания" if cheat_count > 0 else "✅ Ок", delta_color=color)
-        st.divider()
-        
-        radar_data = json.loads(radar_j)
-        if radar_data:
-            c1, c2 = st.columns(2)
-            with c1: draw_gauge_chart(sum(radar_data.values())/len(radar_data))
-            with c2: draw_radar_chart(radar_data)
-        st.markdown(analysis)
-        
-        st.divider()
-        with st.expander("Стенограмма адаптивного интервью (Просмотр в браузере)"):
-            messages = json.loads(hist_j)
-            for msg in messages:
-                if msg["role"] == "assistant":
-                    st.markdown(f"**Система:** {msg['content']}")
-                else:
-                    if "ПРОКТОРИНГ" in msg["content"]:
-                        st.error(f"**Кандидат:** {msg['content']}")
-                    else:
-                        st.info(f"**Кандидат:** {msg['content']}")
-        
-        transcript_text = "\n".join([f"{'Система' if m['role']=='assistant' else 'Кандидат'}: {m['content']}" for m in messages])
-        st.download_button("Скачать отчет", f"ОТЧЕТ: {pos}\n\nНАРУШЕНИЯ: {cheat_count}\n\n{analysis}\n\nСТЕНОГРАММА:\n{transcript_text}")
-
-if __name__ == "__main__":
-    main()
+            with st.chat_message(m["role"]): st.write(m["content
