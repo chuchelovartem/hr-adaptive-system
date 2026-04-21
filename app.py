@@ -10,33 +10,34 @@ import streamlit.components.v1 as components
 import plotly.graph_objects as go
 
 # ==========================================
-# 1. АНТИФРОД И ПРОКТОРИНГ (С ПОДСЧЕТОМ)
+# 1. СТЕЛС-ПРОКТОРИНГ (БЕЗ ЛОЖНЫХ СРАБАТЫВАНИЙ)
 # ==========================================
 
 def inject_proctoring_js():
     js_code = """
     <script>
     let cheatCount = parseInt(new URL(window.parent.location.href).searchParams.get('cheat_count') || '0');
-    
-    // ФИКС ЛОЖНЫХ СРАБАТЫВАНИЙ: Ждем 3 секунды перед активацией слежки, чтобы Streamlit успел отрисовать интерфейс
     let isReady = false;
+    
+    // Ждем 3 секунды, чтобы интерфейс Streamlit полностью прогрузился
     setTimeout(() => { isReady = true; }, 3000);
 
     const blockCopyPaste = () => {
         const inputs = window.parent.document.querySelectorAll('textarea, input');
         inputs.forEach(input => {
-            input.onpaste = (e) => { e.preventDefault(); alert('ПРОКТОРИНГ: Вставка текста запрещена!'); return false; };
+            input.onpaste = (e) => { e.preventDefault(); return false; }; // Молча блокируем вставку
             input.oncopy = (e) => e.preventDefault();
             input.oncontextmenu = (e) => e.preventDefault();
         });
     }
     setInterval(blockCopyPaste, 1000);
 
-    document.addEventListener("visibilitychange", () => {
-        // Проверяем, что инициализация прошла и вкладка действительно скрыта
-        if (isReady && document.visibilityState === 'hidden') {
+    // Вешаем слушатель строго на родительский документ, чтобы избежать багов iframe
+    const parentDoc = window.parent.document;
+    parentDoc.addEventListener("visibilitychange", () => {
+        if (isReady && parentDoc.visibilityState === 'hidden') {
             cheatCount++;
-            alert('ПРОКТОРИНГ: Зафиксировано переключение вкладки! Возвращайтесь к тесту.');
+            // УБРАН alert(), так как он сам крадет фокус и вызывает накрутку счетчика
             const url = new URL(window.parent.location.href);
             url.searchParams.set('cheat_count', cheatCount);
             window.parent.history.pushState({}, '', url);
@@ -135,7 +136,6 @@ class GigaChatIntegration:
 
 def get_adaptive_question_prompt(role, pos, step, max_steps):
     if role == "Соискатель":
-        # УНИВЕРСАЛЬНАЯ МАТРИЦА ОЦЕНКИ (Подходит для любой профессии: от юриста до программиста)
         domains = [
             "Фундаментальные профессиональные знания и базовая терминология",
             "Практический кейс: решение типичной нестандартной или конфликтной ситуации",
@@ -151,7 +151,7 @@ def get_adaptive_question_prompt(role, pos, step, max_steps):
         ШАГ: {step}/{max_steps}.
         
         ТВОЯ ЗАДАЧА: Задай ОДИН практический вопрос.
-        🚨 ОБЯЗАТЕЛЬНОЕ УСЛОВИЕ: Вопрос должен СТРОГО соответствовать специфике профессии "{pos}". Абсолютно запрещено задавать вопросы из других сфер (например, не спрашивай про строительство, если кандидат не строитель)!
+        🚨 ОБЯЗАТЕЛЬНОЕ УСЛОВИЕ: Вопрос должен СТРОГО соответствовать специфике профессии "{pos}". Абсолютно запрещено задавать вопросы из других сфер!
         
         Твоя текущая область проверки для этого вопроса: "{current_domain}". 
         КАРДИНАЛЬНО СМЕНИ ТЕМУ относительно прошлого вопроса. Переходи строго к новой указанной области.
@@ -168,7 +168,12 @@ def get_adaptive_question_prompt(role, pos, step, max_steps):
 
 def get_final_analysis_prompt(role, pos, transcript, cheat_count):
     base_rules = "Стиль: профессиональный HR-аудит. Запрещено использовать эмодзи."
-    proctoring = f" ВНИМАНИЕ: Кандидат переключал вкладки {cheat_count} раз! Это признак списывания. Отрази это в рисках." if cheat_count > 0 else ""
+    
+    # Новая логика: изолируем влияние списывания только на 1 шкалу, чтобы остальные графики рисовались корректно
+    if cheat_count > 0:
+        proctoring = f" \nВНИМАНИЕ: Кандидат переключал вкладки {cheat_count} раз! Это признак списывания. Отрази это в рисках. При выставлении оценок в JSON обнули шкалу 'Устойчивость_к_проверке' (поставь 0), но остальные навыки оцени объективно, исходя из текста ответов."
+    else:
+        proctoring = ""
     
     if role == "Соискатель":
         return f"""Ты — HR-директор. Проведи аудит интервью на позицию {pos}.
