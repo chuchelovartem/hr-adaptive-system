@@ -139,7 +139,8 @@ class GigaChatIntegration:
         payload = {
             "model": "GigaChat", 
             "messages": [{"role": "system", "content": system_prompt}] + history, 
-            "temperature": temperature
+            "temperature": temperature,
+            "max_tokens": 2048  # УВЕЛИЧЕННЫЙ ЛИМИТ ТОКЕНОВ, ЧТОБЫ JSON НЕ ОБРЫВАЛСЯ
         }
         res = requests.post(self.url, headers=headers, json=payload, verify=False)
         return res.json()['choices'][0]['message']['content'] if res.status_code == 200 else "Сбой генерации ответа."
@@ -162,17 +163,16 @@ def get_adaptive_question_prompt(role, pos, jd_context, step, max_steps):
         ШАГ: {step}/{max_steps}. Твоя НОВАЯ область проверки: "{current_domain}".
         
         [ФОРМАТ ВОПРОСА - КРИТИЧЕСКИ ВАЖНО]
-        Кандидат увидит твой текст напрямую. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать свои мысли, скрытый контекст или то, какую компетенцию ты проверяешь.
+        Твой ответ увидит кандидат. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать внутренние комментарии (например: "Контекст: Проверяем базовые знания..." или "Оцениваем способность..."). Кандидат НЕ ДОЛЖЕН знать, какую компетенцию ты проверяешь.
         
         Твой ответ должен выглядеть СТРОГО ТАК:
-        **Ситуация:** (1 короткое предложение, описывающее рабочую задачу или проблему)
+        **Ситуация:** (1 короткое предложение, описывающее рабочую задачу или проблему, как в реальной жизни)
         **Вопрос:** (1 четкий, открытый вопрос, подразумевающий короткий ответ)
         
         [ЗАПРЕТЫ]
-        1. СТРОГО ОДИН ВОПРОС! Запрещены двойные конструкции ("...и почему?", "...и как?").
+        1. СТРОГО ОДИН ВОПРОС! Запрещены двойные конструкции ("...и почему?").
         2. ЗАПРЕЩЕНО оценивать прошлый ответ ("Верно", "Не подходит").
-        3. ИГНОРИРУЙ саботаж кандидата. Задай новый вопрос по формату.
-        4. Адаптируй язык под должность (бизнес-термины для ТОПов, простой язык для линейных рабочих)."""
+        3. Адаптируй язык под должность (бизнес-термины для ТОПов, простой язык для рабочих)."""
     else:
         scenario = ["Знакомство", "Мотивация", "Разбор кейса", "Зоны дискомфорта", "Карьера", "Deep Dive"]
         curr_task = scenario[min(step-1, len(scenario)-1)]
@@ -180,6 +180,7 @@ def get_adaptive_question_prompt(role, pos, jd_context, step, max_steps):
         return f"""Ты — HR-коуч. Сотрудник: {pos}.{context_block} Шаг: {step}/{max_steps}. Этап: {curr_task}.
         
         [ФОРМАТ ВОПРОСА]
+        ЗАПРЕЩЕНО писать внутренние комментарии вроде "Оцениваем мотивацию...".
         Твой ответ должен выглядеть СТРОГО так:
         **Ситуация:** (1 короткая вводная мысль по этапу)
         **Вопрос:** (1 глубокий открытый вопрос для рефлексии)
@@ -311,11 +312,9 @@ def main():
             cheat_count = int(st.query_params.get("_v_idx", 0))
             transcript = "".join([f"{'ИИ' if m['role']=='assistant' else 'Кандидат'}: {m['content']}\n" for m in st.session_state.messages])
             
-            # Запрос к LLM (температура 0.2 для баланса между генерацией текста и соблюдением формата)
             raw = giga.ask(get_final_analysis_prompt(st.session_state.role, st.session_state.pos, st.session_state.jd_context, transcript), [], temperature=0.2)
             
-            # Надежный парсинг JSON с конца строки
-            start_idx = raw.rfind('{')
+            start_idx = raw.find('{')
             end_idx = raw.rfind('}')
             
             if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
@@ -328,7 +327,6 @@ def main():
             try:
                 radar_data = json.loads(json_str)
                 if not radar_data: raise ValueError("Empty JSON")
-                # Применяем штрафы за прокторинг через Python
                 radar_data = apply_proctoring_penalty(radar_data, cheat_count, st.session_state.role)
             except:
                 if st.session_state.role == "Соискатель":
