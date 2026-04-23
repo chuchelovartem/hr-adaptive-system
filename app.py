@@ -424,21 +424,23 @@ def show_hr_view(report_id):
                 elif "ПРОКТОРИНГ" in msg["content"]: st.error(f"**Кандидат:** {msg['content']}")
                 else: st.info(f"**Кандидат:** {msg['content']}")
         
-        # Формирование TXT отчета
+        # Формирование TXT отчета с кодировкой utf-8-sig для Windows
         transcript_text = "\n".join([f"{'Система' if m['role']=='assistant' else 'Кандидат'}: {m['content']}" for m in messages])
         radar_text = "\n".join([f"{k}: {v}" for k, v in radar_data.items()])
         download_txt = f"ОТЧЕТ: {pos}\n\nНАРУШЕНИЯ ПРОКТОРИНГА: {cheat_count}\n\nОЦЕНКИ:\n{radar_text}\n\n{analysis}\n\nСТЕНОГРАММА:\n{transcript_text}"
+        download_txt_bytes = download_txt.encode('utf-8-sig')
         
-        # Формирование CSV выгрузки
+        # Формирование CSV выгрузки с кодировкой utf-8-sig для корректного открытия в Excel (BOM)
         csv_header = "Роль,Должность,Нарушения_Прокторинга," + ",".join(radar_data.keys())
         csv_row = f"{role},{pos},{cheat_count}," + ",".join(map(str, radar_data.values()))
         download_csv = f"{csv_header}\n{csv_row}"
+        download_csv_bytes = download_csv.encode('utf-8-sig')
 
         col1, col2 = st.columns(2)
         with col1:
-            st.download_button("📄 Скачать текстовый отчет", download_txt, file_name="hr_report.txt")
+            st.download_button("📄 Скачать текстовый отчет", download_txt_bytes, file_name="hr_report.txt")
         with col2:
-            st.download_button("📊 Экспорт массива оценок (CSV)", download_csv, file_name=f"export_{pos.replace(' ', '_')}.csv", mime="text/csv")
+            st.download_button("📊 Экспорт массива оценок (CSV)", download_csv_bytes, file_name=f"export_{pos.replace(' ', '_')}.csv", mime="text/csv")
 
 if __name__ == "__main__":
     main()
