@@ -1,7 +1,8 @@
-import os, uuid, json, sqlite3, time, re, requests
+import os, uuid, json, sqlite3, time, re, requests, io
 import streamlit as st
 import streamlit.components.v1 as components
 import plotly.graph_objects as go
+import pandas as pd
 
 # 1. Стелс-прокторинг и защита интерфейса 
 
@@ -69,7 +70,7 @@ def save_report(role, pos, history, analysis, radar_data, cheat_count):
 def get_report(report_id):
     conn = sqlite3.connect('hr_platform_final.db')
     c = conn.cursor()
-    c.execute("SELECT role_type, target_pos, dialog_history, analysis_text, radar_data, cheat_count FROM adaptive_reports WHERE id=?", (report_id,))
+    c.execute("SELECT role_type, target_pos, dialog_history, analysis_text, radar_data, cheat_count, created_at FROM adaptive_reports WHERE id=?", (report_id,))
     res = c.fetchone()
     conn.close()
     return res
@@ -103,6 +104,7 @@ def apply_proctoring_penalty(radar_data, cheat_count, role):
             current = radar_data.get("Устойчивость_к_проверке", 5)
             radar_data["Устойчивость_к_проверке"] = max(1, current - penalty)
         else:
+            # Для сотрудника штрафуем адаптивность или вовлеченность
             current = radar_data.get("Адаптивность", 5)
             radar_data["Адаптивность"] = max(1, current - penalty)
     return radar_data
@@ -278,11 +280,9 @@ def main():
     elif st.session_state.step == "pos_input":
         pos = st.text_input("Укажите позицию/должность:")
         jd_context = st.text_area("Дополнительное описание вакансии (опционально):", height=100)
-        
         if st.button("Начать") and pos.strip():
             st.session_state.update({'pos': pos, 'jd_context': jd_context, 'step': "interview", 'q_count': 1})
             st.query_params.clear()
-            
             with st.spinner("Генерация первого вопроса..."):
                 q = giga.ask(get_adaptive_question_prompt(st.session_state.role, pos, jd_context, 1, st.session_state.max_q), [], temperature=0.6)
                 st.session_state.messages.append({"role": "assistant", "content": q})
@@ -295,32 +295,26 @@ def main():
         remaining = max(0, time_limit - int(elapsed))
 
         for m in st.session_state.messages:
-            with st.chat_message(m["role"]): 
-                st.write(m["content"])
+            with st.chat_message(m["role"]): st.write(m["content"])
         
         st.progress(remaining / time_limit)
         st.caption(f"Вопрос {st.session_state.q_count} из {st.session_state.max_q} | Осталось времени: {remaining} сек.")
 
-        user_input = st.chat_input("Ваш лаконичный ответ...")
-        
-        if remaining <= 0 and not user_input:
-            user_input = "[ПРОКТОРИНГ: Кандидат не уложился в отведенное время]"
-
-        if user_input:
+        user_input = st.chat_input("Ваш ответ...")
+        if (remaining <= 0 and not user_input) or user_input:
+            if not user_input: user_input = "[ПРОКТОРИНГ: Время истекло]"
             st.session_state.messages.append({"role": "user", "content": user_input})
             st.session_state.q_count += 1
-            
             if st.session_state.q_count <= st.session_state.max_q:
                 with st.spinner("Анализ ответа..."):
                     hist = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-                    q = giga.ask(get_adaptive_question_prompt(st.session_state.role, st.session_state.pos, st.session_state.jd_context, st.session_state.q_count, st.session_state.max_q), hist, temperature=0.6)
+                    q = giga.ask(get_adaptive_question_prompt(st.session_state.role, st.session_state.pos, st.session_state.jd_context, st.session_state.q_count, st.session_state.max_q), hist)
                     st.session_state.messages.append({"role": "assistant", "content": q})
-                    st.session_state.start_time = time.time() 
+                    st.session_state.start_time = time.time()
                 st.rerun()
             else:
                 st.session_state.step = "analysis"
                 st.rerun()
-
         time.sleep(1)
         st.rerun()
 
@@ -329,100 +323,80 @@ def main():
             cheat_count = int(st.query_params.get("_v_idx", 0))
             transcript = "".join([f"{'ИИ' if m['role']=='assistant' else 'Кандидат'}: {m['content']}\n" for m in st.session_state.messages])
             
-            raw = giga.ask(get_final_analysis_prompt(st.session_state.role, st.session_state.pos, st.session_state.jd_context, transcript), [], temperature=0.2)
+            # Первый запрос анализа
+            raw = giga.ask(get_final_analysis_prompt(st.session_state.role, st.session_state.pos, st.session_state.jd_context, transcript), [], temperature=0.1)
             
-            start_idx = raw.find('{')
-            end_idx = raw.rfind('}')
-            
-            if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
-                json_str = raw[start_idx:end_idx+1]
-                text_report = re.split(r'(?i)ШАГ 2', raw[:start_idx])[0].strip()
-                text_report = text_report.replace("```json", "").replace("```", "").strip()
-            else:
-                json_str = "{}"
-                text_report = re.split(r'(?i)ШАГ 2', raw)[0].strip()
-                text_report = text_report.replace("```json", "").replace("```", "").strip()
+            def extract_json(text):
+                try:
+                    match = re.search(r'\{.*\}', text, re.DOTALL)
+                    return json.loads(match.group()) if match else None
+                except: return None
 
-            try:
-                radar_data = json.loads(json_str)
-                if not radar_data: raise ValueError("Empty JSON")
-                radar_data = apply_proctoring_penalty(radar_data, cheat_count, st.session_state.role)
-            except:
+            radar_data = extract_json(raw)
+            
+            if not radar_data:
+                retry_msg = [{"role": "user", "content": f"На основе этого отчета: \n{raw}\nВыведи ТОЛЬКО JSON-блок с оценками. Никакого текста."}]
+                retry_raw = giga.ask("Ты — технический анализатор. Твоя цель — JSON.", retry_msg, temperature=0.1)
+                radar_data = extract_json(retry_raw)
+
+            # Окончательная валидация данных
+            if not radar_data:
                 if st.session_state.role == "Соискатель":
-                    radar_data = {"Техническая_Точность": 0, "Скорость_Мышления": 0, "Практический_Опыт": 0, "Лаконичность": 0, "Устойчивость_к_проверке": 0} 
+                    radar_data = {"Техническая_Точность": 0, "Скорость_Мышления": 0, "Практический_Опыт": 0, "Лаконичность": 0, "Устойчивость_к_проверке": 0}
                 else:
                     radar_data = {"Результативность": 0, "Обучаемость": 0, "Лидерство": 0, "Адаптивность": 0, "Экспертиза": 0}
 
+            radar_data = apply_proctoring_penalty(radar_data, cheat_count, st.session_state.role)
+            text_report = re.split(r'\{', raw)[0].replace("```json", "").strip()
+
             rid = save_report(st.session_state.role, st.session_state.pos, st.session_state.messages, text_report, radar_data, cheat_count)
-            st.success("Интервью успешно завершено.")
-            
-            app_domain = "https://adaptive-hr-system.streamlit.app"
-            st.code(f"{app_domain}/?report={rid}")
-            
+            st.success("Интервью завершено.")
+            st.code(f"[https://adaptive-hr-system.streamlit.app/?report=](https://adaptive-hr-system.streamlit.app/?report=){rid}")
             if st.button("На главную"):
                 st.query_params.clear()
                 for k in list(st.session_state.keys()): del st.session_state[k]
                 st.rerun()
 
+# 6. Панель HR и экспорт данных
+
 def show_hr_view(report_id):
     st.title("HR-Аналитика и Прокторинг")
     expected = st.secrets.get("HR_PIN", "1234")
-    
-    if 'hr_auth' not in st.session_state: 
-        st.session_state.hr_auth = False
-    
-    if not st.session_state.hr_auth:
-        with st.form("hr_login"):
-            pin = st.text_input("Введите PIN-код для доступа к аналитике:", type="password")
-            submitted = st.form_submit_button("Войти (HR Доступ)")
-            if submitted:
-                if pin == expected:
-                    st.session_state.hr_auth = True
-                    st.rerun()
-                else:
-                    st.error("Неверный PIN-код")
+    if not st.session_state.get('hr_auth'):
+        with st.form("login"):
+            pin = st.text_input("PIN:", type="password")
+            if st.form_submit_button("Войти") and pin == expected:
+                st.session_state.hr_auth = True
+                st.rerun()
         return
 
     data = get_report(report_id)
     if data:
-        role, pos, hist_j, analysis, radar_j, cheat_count = data
-        st.markdown(f"### {role}: {pos}")
-        st.divider()
-        
-        color = "inverse" if cheat_count > 0 else "normal"
-        metric_label = "Потеря фокуса (переключение окон)" if role == "Соискатель" else "Потеря фокуса (отвлечение)"
-        delta_label = "🚨 Внимание: Риск списывания" if (role == "Соискатель" and cheat_count > 0) else ("🚨 Внимание: Риск потери фокуса" if cheat_count > 0 else "✅ Ок")
-        st.metric(metric_label, f"{cheat_count} раз", delta=delta_label, delta_color=color)
-        st.divider()
-        
+        role, pos, hist_j, analysis, radar_j, cheat_count, created_at = data
         radar_data = json.loads(radar_j)
-        if radar_data:
-            c1, c2 = st.columns(2)
-            is_error = all(v == 0 for v in radar_data.values())
-            if is_error:
-                st.error("⚠️ ВНИМАНИЕ: Ошибочные данные (0 баллов). Технический сбой генерации JSON. Ознакомьтесь со стенограммой вручную.")
-            
-            with c1: draw_gauge_chart(sum(radar_data.values())/len(radar_data))
-            with c2: draw_radar_chart(radar_data)
-            
+        
+        st.markdown(f"### {role}: {pos} ({created_at})")
+        st.metric("Нарушения прокторинга", f"{cheat_count} раз", delta="🚨 Риск" if cheat_count > 0 else "✅ Ок", delta_color="inverse")
+        
+        c1, c2 = st.columns(2)
+        with c1: draw_gauge_chart(sum(radar_data.values())/len(radar_data))
+        with c2: draw_radar_chart(radar_data)
         st.markdown(analysis)
+
         st.divider()
+        col_ex1, col_ex2 = st.columns(2)
         
-        with st.expander("Сырые данные оценки (JSON)"):
-            st.code(json.dumps(radar_data, indent=4, ensure_ascii=False), language='json')
+        export_row = {
+            "ID": report_id, "Дата": created_at, "Роль": role, "Должность": pos,
+            "Нарушения": cheat_count, **radar_data
+        }
+        df_export = pd.DataFrame([export_row])
+        csv_buffer = io.BytesIO()
+        df_export.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+        col_ex1.download_button("Экспорт CSV (для 1C/E-Staff)", csv_buffer.getvalue(), f"report_{pos}.csv", "text/csv")
         
-        with st.expander("Стенограмма адаптивного интервью (Просмотр)"):
-            messages = json.loads(hist_j)
-            for msg in messages:
-                if msg["role"] == "assistant": st.markdown(f"**Система:** {msg['content']}")
-                elif "ПРОКТОРИНГ" in msg["content"]: st.error(f"**Кандидат:** {msg['content']}")
-                else: st.info(f"**Кандидат:** {msg['content']}")
-        
-        transcript_text = "\n".join([f"{'Система' if m['role']=='assistant' else 'Кандидат'}: {m['content']}" for m in messages])
-        radar_text = "\n".join([f"{k}: {v}" for k, v in radar_data.items()])
-        download_content = f"ОТЧЕТ: {pos}\n\nНАРУШЕНИЯ ПРОКТОРИНГА: {cheat_count}\n\nОЦЕНКИ:\n{radar_text}\n\n{analysis}\n\nСТЕНОГРАММА:\n{transcript_text}"
-        
-        st.download_button("Скачать отчет PDF/TXT", download_content, file_name="hr_report.txt")
+        full_txt = f"ОТЧЕТ ПО {pos}\nНарушения: {cheat_count}\n\n{analysis}"
+        col_ex2.download_button("Скачать TXT (Отчет)", full_txt, f"report_{pos}.txt")
 
 if __name__ == "__main__":
     main()
