@@ -3,9 +3,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 import plotly.graph_objects as go
 
-# ==========================================
-# 1. СТЕЛС-ПРОКТОРИНГ И ЗАЩИТА ИНТЕРФЕЙСА
-# ==========================================
+# 1. Стелс-прокторинг и защита интерфейса 
+
 def inject_proctoring_js():
     js_code = """
     <script>
@@ -46,9 +45,8 @@ def inject_proctoring_js():
     """
     components.html(js_code, height=0)
 
-# ==========================================
-# 2. БАЗА ДАННЫХ И ВИЗУАЛИЗАЦИЯ
-# ==========================================
+# 2. База данных и визуализация
+
 def init_db():
     conn = sqlite3.connect('hr_platform_final.db')
     c = conn.cursor()
@@ -96,9 +94,8 @@ def draw_radar_chart(data_dict):
     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 10])), height=300, margin=dict(l=40, r=40, t=20, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
-# ==========================================
-# 3. БИЗНЕС-ЛОГИКА ПРОКТОРИНГА НА PYTHON
-# ==========================================
+# 3. Бизнес-логика прокторинга
+
 def apply_proctoring_penalty(radar_data, cheat_count, role):
     if cheat_count > 0:
         penalty = min(cheat_count, 3) 
@@ -110,9 +107,8 @@ def apply_proctoring_penalty(radar_data, cheat_count, role):
             radar_data["Адаптивность"] = max(1, current - penalty)
     return radar_data
 
-# ==========================================
-# 4. ИНТЕГРАЦИЯ И ПРОМПТ-ИНЖИНИРИНГ (GIGACHAT)
-# ==========================================
+# 4. Интеграция и промт-инжиниринг
+
 class GigaChatIntegration:
     def __init__(self, auth_key):
         self.auth_key = auth_key
@@ -251,9 +247,8 @@ def get_final_analysis_prompt(role, pos, jd_context, transcript):
         [СТЕНОГРАММА]
         {transcript}"""
 
-# ==========================================
-# 5. ИНТЕРФЕЙС И ГЛАВНЫЙ ЦИКЛ
-# ==========================================
+# 5. Интерфейс и главный цикл
+
 def main():
     st.set_page_config(page_title="Modular HR-Tech System", layout="centered")
     init_db()
