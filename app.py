@@ -3,9 +3,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import plotly.graph_objects as go
 
-# ==========================================
 # 1. СТЕЛС-ПРОКТОРИНГ И ЗАЩИТА ИНТЕРФЕЙСА
-# ==========================================
 def inject_proctoring_js():
     js_code = """
     <script>
@@ -46,9 +44,7 @@ def inject_proctoring_js():
     """
     components.html(js_code, height=0)
 
-# ==========================================
 # 2. БАЗА ДАННЫХ И ВИЗУАЛИЗАЦИЯ
-# ==========================================
 def init_db():
     conn = sqlite3.connect('hr_platform_final.db')
     c = conn.cursor()
@@ -96,9 +92,7 @@ def draw_radar_chart(data_dict):
     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 10])), height=300, margin=dict(l=40, r=40, t=20, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
-# ==========================================
 # 3. БИЗНЕС-ЛОГИКА ПРОКТОРИНГА НА PYTHON
-# ==========================================
 def apply_proctoring_penalty(radar_data, cheat_count, role):
     if cheat_count > 0:
         penalty = min(cheat_count, 3) 
@@ -110,9 +104,7 @@ def apply_proctoring_penalty(radar_data, cheat_count, role):
             radar_data["Адаптивность"] = max(1, current - penalty)
     return radar_data
 
-# ==========================================
-# 4. ИНТЕГРАЦИЯ И ПРОМПТ-ИНЖИНИРИНГ (GIGACHAT)
-# ==========================================
+# 4. ИНТЕГРАЦИЯ И ПРОМПТ-ИНЖИНИРИНГ
 class GigaChatIntegration:
     def __init__(self, auth_key):
         self.auth_key = auth_key
@@ -243,9 +235,7 @@ def get_final_analysis_prompt(role, pos, jd_context, transcript):
         [СТЕНОГРАММА]
         {transcript}"""
 
-# ==========================================
 # 5. ИНТЕРФЕЙС И ГЛАВНЫЙ ЦИКЛ
-# ==========================================
 def main():
     st.set_page_config(page_title="Modular HR-Tech System", layout="centered")
     init_db()
@@ -326,7 +316,6 @@ def main():
             cheat_count = int(st.query_params.get("_v_idx", 0))
             transcript = "".join([f"{'ИИ' if m['role']=='assistant' else 'Кандидат'}: {m['content']}\n" for m in st.session_state.messages])
             
-            # Первая попытка генерации
             raw = giga.ask(get_final_analysis_prompt(st.session_state.role, st.session_state.pos, st.session_state.jd_context, transcript), [], temperature=0.2)
             
             def extract_data(text):
@@ -338,7 +327,6 @@ def main():
 
             json_str, text_report = extract_data(raw)
             
-            # Механизм Retry при обрыве/потере JSON
             if not json_str:
                 retry_prompt = "Ты не вывел JSON-словарь. Выведи СТРОГО только JSON-словарь с оценками по 10-балльной шкале, без текстового описания."
                 raw_retry = giga.ask(retry_prompt, [{"role": "assistant", "content": raw}], temperature=0.1)
@@ -424,13 +412,11 @@ def show_hr_view(report_id):
                 elif "ПРОКТОРИНГ" in msg["content"]: st.error(f"**Кандидат:** {msg['content']}")
                 else: st.info(f"**Кандидат:** {msg['content']}")
         
-        # Формирование TXT отчета с кодировкой utf-8-sig для Windows
         transcript_text = "\n".join([f"{'Система' if m['role']=='assistant' else 'Кандидат'}: {m['content']}" for m in messages])
         radar_text = "\n".join([f"{k}: {v}" for k, v in radar_data.items()])
         download_txt = f"ОТЧЕТ: {pos}\n\nНАРУШЕНИЯ ПРОКТОРИНГА: {cheat_count}\n\nОЦЕНКИ:\n{radar_text}\n\n{analysis}\n\nСТЕНОГРАММА:\n{transcript_text}"
         download_txt_bytes = download_txt.encode('utf-8-sig')
         
-        # Формирование CSV выгрузки с кодировкой utf-8-sig для корректного открытия в Excel (BOM)
         csv_header = "Роль,Должность,Нарушения_Прокторинга," + ",".join(radar_data.keys())
         csv_row = f"{role},{pos},{cheat_count}," + ",".join(map(str, radar_data.values()))
         download_csv = f"{csv_header}\n{csv_row}"
